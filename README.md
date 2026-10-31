@@ -31,6 +31,8 @@
 
 ## 安装（按步骤来）
 
+> 本教程默认你用 **OpenCore（OC）** 引导——我们通用的做法。下面所有 kext / config 步骤都按 OpenCore 说明，不涉及其它引导器。
+
 ### 第 0 步：准备
 
 - 一台用 OpenCore 引导的黑苹果（已装 VirtualSMC）。
@@ -51,12 +53,14 @@
 
 ### 第 2 步：把驱动装进 EFI（最关键）
 
-kext 必须由 OpenCore 在开机时**注入**，**不能**装到 `/Library/Extensions`。
+OpenCore 在开机时会自动**注入**这些 kext，所以**不能**装到 `/Library/Extensions`，必须放进 EFI：
 
-1. 挂载 EFI 分区（OpenCore 所在盘的 EFI 卷）。
+1. 挂载 EFI 分区（OC 引导盘上的 `EFI` 卷）。
 2. 解压 `Kexts.zip`，把里面 5 个 `.kext` 复制到 `EFI/OC/Kexts/`。
    （若已有同名或更新版本，保留你自己的即可。）
-3. 用 **ProperTree** 打开 `EFI/OC/config.plist` → 菜单 `File ▸ OC Snapshot`（⌘R），让新 kext 进入注入列表。
+3. 让它们进入 OC 的注入列表（`config.plist` 的 `Kernel → Add`）：
+   - 用 **ProperTree** 打开 `EFI/OC/config.plist` → 菜单 `File ▸ OC Snapshot`（⌘R）；或
+   - 用 **OCAT**（OpenCore Auxiliary Tools）打开后点「更新 / 保存」。
 4. **AMD 用户**：确认 `AMDRyzenCPUPowerManagement.kext` 排在 `SMCAMDProcessor.kext` **之前**（顺序反了会读不到 CPU 温度）。
 5. 保存并重启。
 
