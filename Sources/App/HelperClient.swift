@@ -161,25 +161,33 @@ final class HelperClient: ObservableObject {
         "$VPY" -m pip install --quiet zenmaster 2>/dev/null || true
         sleep 1
         echo installed
-        # 检测 OC boot-args 状态（root，可挂载 EFI）——用于安装后弹窗提示配置 debug=0x144
-        BO=""
-        for vol in /Volumes/*/EFI/OC/config.plist; do [ -f "$vol" ] && BO="$vol" && break; done
-        if [ -z "$BO" ]; then
-          MP=/private/tmp/ghelper-efi-$$
-          mkdir -p "$MP"
-          for disk in $(diskutil list | awk '/EFI/{print $NF}'); do
-            diskutil mount "$disk" >/dev/null 2>&1
-            for vol in /Volumes/*/EFI/OC/config.plist; do [ -f "$vol" ] && BO="$vol" && break; done
-            [ -n "$BO" ] && break
-            if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then
-              if [ -f "$MP/EFI/OC/config.plist" ]; then BO="$MP/EFI/OC/config.plist"; break; fi
-              umount "$MP" 2>/dev/null
-            fi
+        # 检测 OC boot-args 状态（root，可挂载 EFI，含 U 盘）——扫所有 OC，任意一份缺参数就提示
+        BO_ANY=0; BO_MISS=0
+        for vol in /Volumes/*/EFI/OC/config.plist; do
+          [ -f "$vol" ] || continue
+          BO_ANY=1
+          /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$vol" 2>/dev/null | grep -q 'debug=0x144' || BO_MISS=1
+        done
+        MP=/private/tmp/ghelper-efi-$$
+        mkdir -p "$MP"
+        for disk in $(diskutil list | awk '/EFI/{print $NF}'); do
+          diskutil mount "$disk" >/dev/null 2>&1
+          for vol in /Volumes/*/EFI/OC/config.plist; do
+            [ -f "$vol" ] || continue
+            BO_ANY=1
+            /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$vol" 2>/dev/null | grep -q 'debug=0x144' || BO_MISS=1
           done
-        fi
-        if [ -z "$BO" ]; then echo "BOOTARG:NO_OC"
-        elif /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$BO" 2>/dev/null | grep -q 'debug=0x144'; then echo "BOOTARG:OK"
-        else echo "BOOTARG:MISSING"
+          if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then
+            if [ -f "$MP/EFI/OC/config.plist" ]; then
+              BO_ANY=1
+              /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$MP/EFI/OC/config.plist" 2>/dev/null | grep -q 'debug=0x144' || BO_MISS=1
+            fi
+            umount "$MP" 2>/dev/null
+          fi
+        done
+        if [ "$BO_ANY" = 0 ]; then echo "BOOTARG:NO_OC"
+        elif [ "$BO_MISS" = 1 ]; then echo "BOOTARG:MISSING"
+        else echo "BOOTARG:OK"
         fi
         """
 
@@ -202,18 +210,24 @@ final class HelperClient: ObservableObject {
 
     // MARK: 睿频前置（debug=0x144）
 
-    /// 用户态检测（只读已挂载卷，不动 EFI）。promptIfMissing=true 时若缺参数则置 bootArgPromptPending
+    /// 用户态检测（只读已挂载卷，含 U 盘，不动 EFI）：扫所有 OC，任意一份缺参数即 MISSING。
+    /// promptIfMissing=true 时若缺参数则置 bootArgPromptPending
     func checkOCBootArg(promptIfMissing: Bool = false) {
         let script = """
+        ANY=0; MISS=0
         for vol in /Volumes/*/EFI/OC/config.plist; do
           [ -f "$vol" ] || continue
+          ANY=1
           if /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$vol" 2>/dev/null | grep -q 'debug=0x144'; then
-            echo PRESENT; exit 0
+            :
           else
-            echo MISSING; exit 0
+            MISS=1
           fi
         done
-        echo NO_OC
+        if [ "$ANY" = 0 ]; then echo NO_OC
+        elif [ "$MISS" = 1 ]; then echo MISSING
+        else echo PRESENT
+        fi
         """
         runUserScript(script) { [weak self] out in
             Task { @MainActor in
@@ -228,69 +242,113 @@ final class HelperClient: ObservableObject {
         }
     }
 
-    /// 提权写入 debug=0x144 到 OC boot-args（先备份 config.plist）。会挂载未挂载的 EFI 分区。
+    /// 提权写入 debug=0x144 到**所有** OpenCore 的 boot-args（内置盘 + U 盘），
+    /// 每份先备份 config.plist。会挂载未挂载的 EFI 分区；同一份配置按 inode 去重只处理一次。
+    /// 输出一行 `SUMMARY <写入> <已有> <总数>` 供 UI 解析。
     func ensureBootArg() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let script = """
-        PLIST=""
+        PLISTS=""
         for vol in /Volumes/*/EFI/OC/config.plist; do
-          [ -f "$vol" ] && PLIST="$vol" && break
+          [ -f "$vol" ] && PLISTS="$PLISTS
+        $vol"
         done
-        MP=""
-        if [ -z "$PLIST" ]; then
-          MP=/private/tmp/ghelper-efi-$$
+        MPBASE=/private/tmp/ghelper-efi-$$
+        mkdir -p "$MPBASE"
+        MPS=""
+        for disk in $(diskutil list | awk '/EFI/{print $NF}'); do
+          MP="$MPBASE/$disk"
           mkdir -p "$MP"
-          for disk in $(diskutil list | awk '/EFI/{print $NF}'); do
+          if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then
+            MPS="$MPS $MP"
+            [ -f "$MP/EFI/OC/config.plist" ] && PLISTS="$PLISTS
+        $MP/EFI/OC/config.plist"
+          else
             diskutil mount "$disk" >/dev/null 2>&1
             for vol in /Volumes/*/EFI/OC/config.plist; do
-              [ -f "$vol" ] && PLIST="$vol" && break
+              [ -f "$vol" ] && PLISTS="$PLISTS
+        $vol"
             done
-            [ -n "$PLIST" ] && break
-            if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then
-              if [ -f "$MP/EFI/OC/config.plist" ]; then
-                PLIST="$MP/EFI/OC/config.plist"; break
-              fi
-              umount "$MP" 2>/dev/null
-            fi
-          done
-        fi
-        [ -z "$PLIST" ] && { echo "未找到 OpenCore 的 config.plist（请确认已挂载 EFI 分区）"; exit 1; }
-        BDIR="$HOME/Library/Application Support/GHelper/efi-backups"
+          fi
+        done
+        export CFGS="$PLISTS"
+        export BDIR="\(home)/Library/Application Support/GHelper/efi-backups"
         mkdir -p "$BDIR"
-        TS=$(date +%Y%m%d-%H%M%S)
-        cp "$PLIST" "$BDIR/config-$TS.plist"
-        export CFG="$PLIST"
+        export TS=$(date +%Y%m%d-%H%M%S)
         python3 - <<'PY'
-        import plistlib, re, os
-        data = plistlib.load(open(os.environ['CFG'], 'rb'))
-        nv = data.setdefault('NVRAM', {})
-        add = nv.setdefault('Add', {})
-        uuid = '7C436110-AB2A-4BBB-A880-FE41995C9F82'
-        entry = add.setdefault(uuid, {})
-        ba = entry.get('boot-args') or ''
-        m = re.search(r'debug=0x([0-9a-fA-F]+)', ba)
-        if m:
-            cur = int(m.group(1), 16)
-            new = cur | 0x144
-            ba = ba.replace(m.group(0), 'debug=0x%x' % new)
-            changed = (new != cur)
-        else:
-            ba = (ba + ' debug=0x144').strip()
-            changed = True
-        entry['boot-args'] = ba
-        plistlib.dump(data, open(os.environ['CFG'], 'wb'))
-        print('OK' if changed else 'ALREADY', ba)
+        import plistlib, re, os, shutil
+        raw = [p for p in os.environ.get('CFGS', '').split('\\n') if p.strip()]
+        seen, paths = set(), []
+        for p in raw:
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            key = (st.st_dev, st.st_ino)
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(p)
+        bdir, ts = os.environ['BDIR'], os.environ['TS']
+        wrote = already = 0
+        for i, path in enumerate(paths, 1):
+            comps = path.strip('/').split('/')
+            label = comps[-4].replace(' ', '_') if len(comps) >= 4 else 'cfg'
+            shutil.copy(path, os.path.join(bdir, 'config-%s-%d-%s.plist' % (ts, i, label)))
+            data = plistlib.load(open(path, 'rb'))
+            nv = data.setdefault('NVRAM', {})
+            add = nv.setdefault('Add', {})
+            uuid = '7C436110-AB2A-4BBB-A880-FE41995C9F82'
+            entry = add.setdefault(uuid, {})
+            ba = entry.get('boot-args') or ''
+            m = re.search(r'debug=0x([0-9a-fA-F]+)', ba)
+            if m:
+                cur = int(m.group(1), 16)
+                new = cur | 0x144
+                ba2 = ba.replace(m.group(0), 'debug=0x%x' % new)
+                changed = (new != cur)
+            else:
+                ba2 = (ba + ' debug=0x144').strip()
+                changed = True
+            if changed:
+                entry['boot-args'] = ba2
+                plistlib.dump(data, open(path, 'wb'))
+                wrote += 1
+            else:
+                already += 1
+        print('SUMMARY %d %d %d' % (wrote, already, len(paths)))
         PY
+        for m in $MPS; do umount "$m" 2>/dev/null; done
+        rm -rf "$MPBASE" 2>/dev/null
         """
 
         runAdminScript(script) { [weak self] ok, out in
             Task { @MainActor in
                 let message = out.trimmingCharacters(in: .whitespacesAndNewlines)
                 if ok {
-                    let configured = message.hasPrefix("OK")
-                    self?.ocBootArgStatus = configured ? .configured : .present
-                    self?.ocBootArgMessage = configured
-                        ? "已写入 debug=0x144，请重启生效（备份在 ~/Library/Application Support/GHelper/efi-backups/）"
-                        : "debug=0x144 已存在，无需修改"
+                    var wrote = 0, already = 0, total = 0
+                    for line in message.components(separatedBy: .newlines) {
+                        guard line.hasPrefix("SUMMARY") else { continue }
+                        let parts = line.split(separator: " ")
+                        if parts.count >= 4 {
+                            wrote = Int(parts[1]) ?? 0
+                            already = Int(parts[2]) ?? 0
+                            total = Int(parts[3]) ?? 0
+                        }
+                    }
+                    if total == 0 {
+                        self?.ocBootArgStatus = .noOC
+                        self?.ocBootArgMessage = "未找到 OpenCore 的 config.plist（内置盘与 U 盘均未发现）"
+                    } else if wrote > 0 {
+                        self?.ocBootArgStatus = .configured
+                        var msg = "已写入 debug=0x144（\(wrote)/\(total) 份 OC 配置，含 U 盘）"
+                        if already > 0 { msg += "，另 \(already) 份本来已有" }
+                        msg += "。请重启生效（备份在 ~/Library/Application Support/GHelper/efi-backups/）"
+                        self?.ocBootArgMessage = msg
+                    } else {
+                        self?.ocBootArgStatus = .present
+                        self?.ocBootArgMessage = "共 \(total) 份 OC 配置（含 U 盘）均已有 debug=0x144，无需修改"
+                    }
                 } else {
                     self?.ocBootArgStatus = .noOC
                     self?.ocBootArgMessage = "配置失败：\(message)"

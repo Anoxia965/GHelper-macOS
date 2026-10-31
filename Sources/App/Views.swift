@@ -587,7 +587,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("debug=0x144 让 zenmaster 能直连 AMD SMU，睿频开关才生效。改动前会自动备份 config.plist 到 ~/Library/Application Support/GHelper/efi-backups/，且需重启才会生效。")
+                Text("debug=0x144 让 zenmaster 能直连 AMD SMU，睿频开关才生效。内置盘与 U 盘上所有 OpenCore 配置会一并写入；每份改动前自动备份 config.plist 到 ~/Library/Application Support/GHelper/efi-backups/，需重启生效。")
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
 
@@ -621,7 +621,7 @@ struct SettingsView: View {
             Button("现在添加") { model.helper.ensureBootArg() }
             Button("稍后", role: .cancel) {}
         } message: {
-            Text("睿频开关需要 OC 的 boot-args 加 debug=0x144。是否现在自动添加？会先备份 config.plist，修改后需重启生效。")
+            Text("睿频开关需要 OC 的 boot-args 加 debug=0x144。是否现在自动添加？会扫描内置盘与 U 盘上所有 OpenCore 配置，每份先备份 config.plist 再写入，修改后需重启生效。")
         }
     }
 
@@ -630,7 +630,7 @@ struct SettingsView: View {
         case .unknown:   return "检测中…"
         case .noOC:      return "未检测到已挂载的 OC EFI"
         case .present, .configured: return "已配置 ✓"
-        case .missing:   return "未配置（OC 已挂载）"
+        case .missing:   return "未配置（有 OC 缺 debug=0x144）"
         }
     }
 
