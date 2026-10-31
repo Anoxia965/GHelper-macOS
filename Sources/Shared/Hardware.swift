@@ -66,6 +66,7 @@ struct HardwareInfo {
     var memoryModules: [MemoryModule] = []
     // 显卡
     var gpus: [GPUDevice] = []
+    var gpuVRAM = "—"
     // 引导
     var openCoreVersion = "—"
     var bootVolume = "—"
@@ -119,6 +120,7 @@ func collectHardware() -> HardwareInfo {
 
     // —— 显卡（PCI 显示控制器枚举）——
     info.gpus = readPCIDisplays()
+    info.gpuVRAM = readGPUVRAM()
 
     // —— 引导 / OpenCore ——
     info.openCoreVersion = readOpenCoreVersion()
@@ -169,6 +171,15 @@ private func vendorName(_ id: UInt16) -> String {
     case 0x1B4B: return "Marvell"
     default:     return String(format: "0x%04X", id)
     }
+}
+
+private func readGPUVRAM() -> String {
+    guard let out = Shell.run("/usr/sbin/system_profiler", ["SPDisplaysDataType"]) else { return "—" }
+    if let m = matches(of: #"VRAM \(Total\):\s*([^\n]+)"#, in: out).first,
+       !m.isEmpty {
+        return m.trimmingCharacters(in: .whitespaces)
+    }
+    return "—"
 }
 
 private func readPCIDisplays() -> [GPUDevice] {

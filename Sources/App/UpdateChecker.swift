@@ -103,7 +103,7 @@ final class UpdateChecker: ObservableObject {
     nonisolated static var currentVersion: String {
         if let s = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
            !s.isEmpty { return s }
-        return "1.1.0"
+        return "1.2.0"
     }
 
     /// 有待更新版本（给菜单栏角标 / 设置页用）

@@ -73,6 +73,17 @@ final class HelperClient: ObservableObject {
         proxy()?.writeKey(key, value: value, reply: completion)
     }
 
+    /// 读 CPU 实时频率（MHz）。助手未安装或方法不存在时回调 (0, 原因)
+    func readFrequency(completion: @escaping (Double, String) -> Void) {
+        guard let proxy = proxy() else {
+            completion(0, "特权助手未连接，请到设置页重装")
+            return
+        }
+        proxy.readFrequency { mhz, status in
+            completion(mhz, status)
+        }
+    }
+
     // MARK: 安装
 
     /// 用 osascript 弹系统密码框，一次性把助手装进去

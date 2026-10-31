@@ -141,6 +141,17 @@ struct MonitorView: View {
                 StatRow(label: "占用率", value: String(format: "%.0f%%", model.cpuUsage))
                 Bar(value: model.cpuUsage / 100,
                     tint: model.cpuUsage > 80 ? .red : (model.cpuUsage > 50 ? .orange : .blue))
+                if let f = model.cpuFrequencyMHz {
+                    StatRow(label: "频率",
+                            value: String(format: "%.2f GHz", f / 1000),
+                            accent: f >= 4000 ? .green : (f >= 2500 ? .primary : .orange))
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
+                        Text("频率需重装特权助手（root 读取）").font(.system(size: 10))
+                    }
+                    .foregroundStyle(.orange)
+                }
                 if let t = model.cpuTemperature {
                     StatRow(label: "CPU 温度", value: String(format: "%.0f °C", t),
                             accent: t > 90 ? .red : (t > 80 ? .orange : .primary))
@@ -153,7 +164,7 @@ struct MonitorView: View {
                 }
             }
 
-            Card(title: "显卡 · \(model.gpu.name)") {
+            Card(title: "显卡 · \(model.hardware.gpus.first?.name ?? model.gpu.name)") {
                 if let t = model.gpuTemperature {
                     StatRow(label: "温度", value: String(format: "%.0f °C", t),
                             accent: t > 85 ? .red : (t > 75 ? .orange : .primary))
@@ -161,6 +172,16 @@ struct MonitorView: View {
                 }
                 if let u = model.gpu.utilization {
                     StatRow(label: "占用率", value: String(format: "%.0f%%", u))
+                }
+                // GPU 频率：有驱动的核显/独显能读到；NVIDIA 在 macOS 无驱动时为 nil
+                if let f = model.gpu.frequencyMHz {
+                    StatRow(label: "频率", value: String(format: "%.0f MHz", f))
+                } else {
+                    StatRow(label: "频率", value: "不适用（无 macOS 驱动）",
+                            accent: .secondary)
+                }
+                if model.hardware.gpuVRAM != "—" {
+                    StatRow(label: "显存", value: model.hardware.gpuVRAM)
                 }
             }
 
@@ -689,11 +710,18 @@ struct HardwareView: View {
                                 Text(g.name).font(.system(size: 12))
                                 Text("\(g.vendor)\(g.deviceID.isEmpty ? "" : "  \(g.deviceID)")")
                                     .font(.system(size: 10)).foregroundStyle(.secondary)
+                                if h.gpuVRAM != "—" {
+                                    Text("显存 \(h.gpuVRAM)")
+                                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                                }
                             }
                             Spacer()
                         }
                     }
                 }
+                Text("GPU 频率：有官方驱动（如 Intel 核显、部分 AMD 独显）可读取；NVIDIA 在 macOS 下无官方驱动，无法读取频率，只能显示型号与显存。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Card(title: "引导") {

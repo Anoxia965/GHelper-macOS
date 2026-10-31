@@ -25,6 +25,10 @@ let kHelperPlistPath = "/Library/LaunchDaemons/cn.anoxia.GHelper.helper.plist"
     /// 设置风扇目标转速（RPM）。需先切到手动模式
     func setFanTargetRPM(_ index: Int, rpm: Double, reply: @escaping (Bool, String) -> Void)
 
+    /// 读取 CPU 实时频率（MHz）。powermetrics 需要 root，所以放助手这里跑。
+    /// 返回 (MHz, 状态描述)；读不到时返回 (0, 错误原因)。
+    func readFrequency(reply: @escaping (Double, String) -> Void)
+
     /// 读取一个 SMC 键（走 root 通道，备用）
     func readKey(_ key: String, reply: @escaping (NSNumber?, String) -> Void)
 

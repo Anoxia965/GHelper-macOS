@@ -94,6 +94,55 @@ final class HelperService: NSObject, HelperProtocol {
         }
     }
 
+    func readFrequency(reply: @escaping (Double, String) -> Void) {
+        touch()
+        let task = Process()
+        task.launchPath = "/usr/bin/powermetrics"
+        task.arguments = ["-n1", "-i100", "--samplers", "cpu_power"]
+        let pipe = Pipe()
+        let errPipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = errPipe
+        do {
+            try task.run()
+        } catch {
+            reply(0, "powermetrics 启动失败: \(error.localizedDescription)")
+            return
+        }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let out = String(data: data, encoding: .utf8), !out.isEmpty else {
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                            encoding: .utf8) ?? ""
+            reply(0, "powermetrics 无输出: \(err.trimmingCharacters(in: .whitespaces))")
+            return
+        }
+        let mhz = Self.parseFrequencyMHz(out)
+        if mhz > 0 {
+            reply(mhz, "实时")
+        } else {
+            reply(0, "未能从 powermetrics 解析出频率")
+        }
+    }
+
+    /// 从 powermetrics 输出里取所有 "… frequency as fraction of nominal: X% (Y Mhz)"
+    /// 中的 Y，返回最大值（即当前最高核频），单位 MHz。
+    private static func parseFrequencyMHz(_ text: String) -> Double {
+        let ns = text as NSString
+        let pattern = #"frequency as fraction of nominal:\s*[\d.]+%\s*\(\s*([\d.]+)\s*[Mm]hz\s*\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return 0
+        }
+        let range = NSRange(location: 0, length: ns.length)
+        let matches = regex.matches(in: text, range: range)
+        var maxMHz: Double = 0
+        for m in matches where m.numberOfRanges > 1 {
+            let s = ns.substring(with: m.range(at: 1))
+            if let v = Double(s), v > maxMHz { maxMHz = v }
+        }
+        return maxMHz
+    }
+
     func readKey(_ key: String, reply: @escaping (NSNumber?, String) -> Void) {
         touch()
         if let v = smc.readDouble(key) {

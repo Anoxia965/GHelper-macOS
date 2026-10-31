@@ -78,6 +78,7 @@ final class CPUMonitor {
 struct GPUStats {
     var temperature: Double?
     var utilization: Double?
+    var frequencyMHz: Double?   // 有驱动的核显/独显可读到，无驱动（如 NVIDIA）为 nil
     var name: String = "未知"
 }
 
@@ -101,6 +102,11 @@ func readGPUStats() -> GPUStats {
         if let t = dict["Temperature(C)"] as? Double, t > 0 {
             stats.temperature = t
             stats.utilization = dict["Device Utilization %"] as? Double
+            // 有驱动的显卡（如 Intel 核显、某些 AMD 独显）能拿到频率；
+            // NVIDIA 在 macOS 无驱动时 PerformanceStatistics 整个为空，这里自然为 nil
+            stats.frequencyMHz = (dict["Core Frequency(MHz)"] as? Double)
+                ?? (dict["GPU Frequency(MHz)"] as? Double)
+                ?? (dict["Core Clock(MHz)"] as? Double)
 
             // 尽量拿到设备名
             var name = "GPU"

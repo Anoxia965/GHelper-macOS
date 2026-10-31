@@ -19,6 +19,9 @@ final class AppModel: ObservableObject {
     @Published var fans: [FanState] = []
     @Published var hardware = HardwareInfo()
 
+    // 频率（CPU 实时频率来自 root 助手跑 powermetrics；GPU 频率无驱动时为 nil）
+    @Published var cpuFrequencyMHz: Double?
+
     // 温度
     @Published var cpuTemperature: Double?       // 校准后
     @Published var cpuTemperatureRaw: Double?    // 传感器原始值
@@ -91,6 +94,7 @@ final class AppModel: ObservableObject {
     private let cpuMonitor = CPUMonitor()
     private var pollTimer: Timer?
     private var fanTimer: Timer?
+    private var freqTimer: Timer?
 
     /// SMCAMDProcessor 装好后可能出现的 CPU 温度键
     private static let cpuTempKeys = ["TC0P", "TC1P", "TC0D", "TC0E", "TC0F",
@@ -109,6 +113,9 @@ final class AppModel: ObservableObject {
         }
         fanTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.applyNow() }
+        }
+        freqTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshFrequency() }
         }
     }
 
@@ -145,6 +152,16 @@ final class AppModel: ObservableObject {
         } else {
             cpuTemperatureRaw = nil
             cpuTemperature = nil
+        }
+    }
+
+    /// CPU 实时频率：走 root 助手（powermetrics 需要 root）。读不到时为 nil。
+    func refreshFrequency() {
+        guard helper.isInstalled else { cpuFrequencyMHz = nil; return }
+        helper.readFrequency { [weak self] mhz, _ in
+            Task { @MainActor in
+                self?.cpuFrequencyMHz = mhz > 0 ? mhz : nil
+            }
         }
     }
 
