@@ -13,7 +13,7 @@
     <key>CFBundleVersion</key>
     <string>1</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.4.1</string>
+	<string>1.4.2</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -24,5 +24,7 @@
     <string>13.0</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>GHelper 需要执行脚本以安装特权助手。</string>
+    <key>CFBundleIconFile</key>
+    <string>GHelper</string>
 </dict>
 </plist>

@@ -27,12 +27,22 @@ swiftc -O $SRC_SHARED Sources/App/FanCurve.swift \
        Sources/App/AppMain.swift \
        -o "$BUILD/GHelperBin"
 
+# 确保图标资源存在（clean checkout 自动生成，无需手动）
+if [ ! -f Build/GHelper.icns ]; then
+  echo "▸ 生成图标资源（make_icons.swift）…"
+  swift make_icons.swift
+  iconutil --convert icns Build/GHelper.iconset -o Build/GHelper.icns
+fi
+
 echo "▸ 组装 App 包…"
 rm -rf "$APPDIR"
 mkdir -p "$CONTENTS/MacOS"
+mkdir -p "$CONTENTS/Resources"
 cp "$BUILD/GHelperBin"    "$CONTENTS/MacOS/$APP_NAME"
 cp "$BUILD/GHelperHelper" "$CONTENTS/MacOS/GHelperHelper"
 cp Info.plist "$CONTENTS/Info.plist"
+cp Build/GHelper.icns "$CONTENTS/Resources/"
+cp Build/Menubar.pdf  "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/MacOS/GHelperHelper"
 
 echo "▸ 签名（ad-hoc）…"

@@ -41,8 +41,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         popover.animates = true
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "fan.fill", accessibilityDescription: nil)
-            button.image?.isTemplate = true
+            if let url = Bundle.main.url(forResource: "Menubar", withExtension: "pdf"),
+               let img = NSImage(contentsOf: url) {
+                img.isTemplate = true
+                button.image = img
+            } else {
+                button.image = NSImage(systemSymbolName: "fan.fill", accessibilityDescription: nil)
+                button.image?.isTemplate = true
+            }
             button.toolTip = "GHelper"
             updateTitle(model.menuBarTitle)
             button.action = #selector(togglePopover(_:))
