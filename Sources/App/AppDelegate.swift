@@ -56,6 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.updateTitle(model.menuBarTitle)
             }
         }
+
+        // 启动后静默检查一次更新（失败不打扰，发现新版才在顶部亮角标）
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            UpdateChecker.shared.check(auto: true)
+        }
     }
 
     private func updateTitle(_ title: String) {

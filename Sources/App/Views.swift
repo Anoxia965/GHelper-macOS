@@ -58,6 +58,7 @@ struct RootView: View {
                 Text(Machine.model).font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Spacer()
+            UpdateBadge()
             if showWindowAction != nil {
                 Button { showWindowAction?() } label: {
                     Image(systemName: "macwindow")
@@ -457,10 +458,49 @@ struct BatteryView: View {
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var updater = UpdateChecker.shared
+    @ObservedObject private var installer = UpdateInstaller.shared
     @AppStorage("launchAtLogin") private var launchAtLogin = false
 
     var body: some View {
         VStack(spacing: 12) {
+            Card(title: "版本与更新") {
+                HStack {
+                    Text("当前版本").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("v\(UpdateChecker.currentVersion)")
+                        .font(.system(size: 12, weight: .medium)).monospacedDigit()
+                }
+                updateStatus
+                HStack(spacing: 6) {
+                    Button(updater.isChecking ? "检查中…" : "检查更新") { updater.check() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(updater.isChecking || installer.isWorking)
+
+                    if let rel = updater.updateAvailable {
+                        Button(installer.isWorking ? "更新中…" : "下载并更新") {
+                            installer.installUpdate(rel)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(installer.isWorking)
+                        if let k = rel.kextsDownloadURL {
+                            Link("下载驱动", destination: k).font(.system(size: 11))
+                        }
+                    }
+                    Spacer()
+                }
+                if !installer.statusText.isEmpty {
+                    Text(installer.statusText)
+                        .font(.system(size: 10))
+                        .foregroundStyle(installer.isWorking ? Color.gray : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("更新会检测→下载→删掉旧安装（移废纸篓）→装新版→重启。驱动如有变化再点「安装/重装」助手。")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+            }
+
             Card(title: "特权助手") {
                 HStack(spacing: 6) {
                     Circle()
@@ -507,6 +547,64 @@ struct SettingsView: View {
                     Text(err).font(.system(size: 10)).foregroundStyle(.red)
                 }
             }
+        }
+    }
+
+    /// 更新检查状态行
+    @ViewBuilder private var updateStatus: some View {
+        switch updater.state {
+        case .idle:
+            Text("尚未检查。").font(.system(size: 10)).foregroundStyle(.secondary)
+
+        case .checking:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("正在向 GitHub 检查…").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+
+        case .upToDate:
+            Label("已是最新版本", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 11)).foregroundStyle(.green)
+
+        case .available(let rel):
+            VStack(alignment: .leading, spacing: 3) {
+                Label("发现新版本 \(rel.tagName)", systemImage: "arrow.down.circle.fill")
+                    .font(.system(size: 11)).foregroundStyle(.orange)
+                if let body = rel.body, !body.isEmpty {
+                    Text(body)
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(6)
+                }
+                if let page = rel.pageURL {
+                    Link("查看发布说明", destination: page).font(.system(size: 10))
+                }
+            }
+
+        case .failed(let msg):
+            Label(msg, systemImage: "exclamationmark.triangle")
+                .font(.system(size: 10)).foregroundStyle(.orange)
+        }
+    }
+}
+
+// MARK: - 菜单栏「有新版」角标
+
+/// 独立小视图持有 @ObservedObject，避免给 RootView 加存储属性（它在别的文件里被构造）
+struct UpdateBadge: View {
+    @ObservedObject private var updater = UpdateChecker.shared
+
+    var body: some View {
+        if let rel = updater.updateAvailable, let u = rel.appDownloadURL {
+            Link(destination: u) {
+                Text(rel.tagName)
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(.orange.opacity(0.22), in: Capsule())
+                    .foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain)
+            .help("有新版本 \(rel.tagName)，点击下载")
         }
     }
 }

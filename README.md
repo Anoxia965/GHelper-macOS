@@ -42,12 +42,12 @@
 
 ### 第 1 步：下载
 
-到 [Releases](https://github.com/Anoxia965/GHelper-macOS/releases) 下载两个文件：
+到 [Releases](https://github.com/Anoxia965/GHelper-macOS/releases) 下载：
 
 | 文件 | 内容 |
 | --- | --- |
-| `GHelper.app.zip` | 应用本体 |
-| `Kexts.zip` | 所需驱动：VirtualSMC、Lilu、AsusFanSMC、SMCAMDProcessor、AMDRyzenCPUPowerManagement |
+| `GHelper.dmg` | **安装包**（双击打开，内含 `GHelper.app` + 所需驱动 `Kexts/` + 说明） |
+| `Kexts.zip` | 只想要驱动时下载：VirtualSMC、Lilu、AsusFanSMC、SMCAMDProcessor、AMDRyzenCPUPowerManagement |
 
 > 想自己编译源码，见文末「从源码构建」。
 
@@ -68,7 +68,7 @@ OpenCore 在开机时会自动**注入**这些 kext，所以**不能**装到 `/L
 
 ### 第 3 步：安装 App
 
-1. 解压 `GHelper.app.zip`，把 `GHelper.app` 拖到 `/Applications`。
+1. 双击打开 `GHelper.dmg`，把里面的 `GHelper.app` 拖到 `/Applications`（驱动已在 DMG 的 `Kexts/` 里，见第 2 步）。
 2. 打开 App。若被 Gatekeeper 拦住：右键「打开」，或在终端执行
    ```bash
    xattr -dr com.apple.quarantine /Applications/GHelper.app
@@ -86,6 +86,12 @@ OpenCore 在开机时会自动**注入**这些 kext，所以**不能**装到 `/L
 - AMD 机器还能看到 `SMCAMDProcessor` 已加载
 
 看到这些，风扇控制与温度监控就可用了。
+
+### 检查更新 / 一键更新
+
+- 设置页点 **检查更新**，App 会去 GitHub Releases 看有没有新版本（启动时也会静默查一次，有新版顶部会亮角标）。
+- 发现新版点 **下载并更新**：自动下载 DMG → **删掉旧安装（移到废纸篓）** → 装新版 → 重启。更新后如驱动有变，再点「安装 / 重装」助手即可。
+- **以后发新版**：往 GitHub 打 tag 发 Release、附上 `GHelper.dmg` 即可，用户端点「检查更新」就能收到。
 
 ---
 

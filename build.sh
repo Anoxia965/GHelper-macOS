@@ -19,6 +19,7 @@ swiftc -O $SRC_SHARED Sources/Helper/main.swift \
 echo "▸ 编译主程序…"
 swiftc -O $SRC_SHARED Sources/App/FanCurve.swift \
        Sources/App/HelperClient.swift \
+       Sources/App/UpdateChecker.swift \
        Sources/App/AppModel.swift \
        Sources/App/Views.swift \
        Sources/Shared/Hardware.swift \
