@@ -44,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if let url = Bundle.main.url(forResource: "Menubar", withExtension: "pdf"),
                let img = NSImage(contentsOf: url) {
                 img.isTemplate = true
+                // 菜单栏图标标准约 18pt，显式约束防止 PDF 原生尺寸过大
+                img.size = NSSize(width: 18, height: 18)
                 button.image = img
             } else {
                 button.image = NSImage(systemSymbolName: "fan.fill", accessibilityDescription: nil)

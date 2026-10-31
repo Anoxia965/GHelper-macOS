@@ -177,18 +177,18 @@ renderMenubar(size: 72, path: "Build/menubar@2x.png")
 print("✓ 菜单栏图标 PNG 已生成")
 
 // ---- 菜单栏 PDF（矢量模板，优先用）----
+// 注意：PDF mediaBox 直接决定菜单栏显示尺寸。菜单栏图标标准约 18pt，
+// 故画布设为 18×18；内部仍用 72 逻辑坐标绘制，整体按 18/72 缩放（形状不变）。
 let pdfPath = "Build/Menubar.pdf"
-var pdfBox = CGRect(x: 0, y: 0, width: 72, height: 72)
+let MB: CGFloat = 18
+var pdfBox = CGRect(x: 0, y: 0, width: MB, height: MB)
 guard let pdfConsumer = CGDataConsumer(url: URL(fileURLWithPath: pdfPath) as CFURL),
       let pdfCtx = CGContext(consumer: pdfConsumer, mediaBox: &pdfBox, nil) else {
     fatalError("no pdf ctx")
 }
 pdfCtx.beginPDFPage(nil)
-pdfCtx.scaleBy(x: 1, y: 1)
-// 复用 renderMenubar 的绘制逻辑：在 pdfCtx 上再画一遍
-let s2 = CGFloat(1)
-_ = s2
-pdfCtx.scaleBy(x: 1, y: 1)
+// 72 逻辑坐标 → 18pt 画布
+pdfCtx.scaleBy(x: MB / 72.0, y: MB / 72.0)
 let cc = CGPoint(x: 36, y: 36)
 let RR: CGFloat = 32
 let hex2 = CGMutablePath()
