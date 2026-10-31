@@ -289,10 +289,22 @@ struct MonitorView: View {
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                         }
                     }
+                    // NullMoth 额外提供的 GPU 核心/显存占用细分
+                    if model.gpu.coreUtil != nil || model.gpu.memUtil != nil {
+                        HStack(spacing: 14) {
+                            if let c = model.gpu.coreUtil {
+                                LabeledBar(label: "核心", value: c, color: Brand.accent2)
+                            }
+                            if let m = model.gpu.memUtil {
+                                LabeledBar(label: "显存", value: m, color: Brand.accent)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
                 } else {
                     HStack(spacing: 4) {
                         Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
-                        Text("GPU 温度不可用（NVIDIA 无 macOS 驱动）")
+                        Text("GPU 温度不可用")
                             .font(.system(size: 10)).foregroundStyle(.orange)
                     }
                 }

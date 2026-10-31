@@ -265,3 +265,22 @@ struct MiniBar: View {
         .frame(height: 5)
     }
 }
+
+/// 带标签与百分比文字的小进度条（value 为 0…100 的百分比）
+struct LabeledBar: View {
+    let label: String
+    let value: Double
+    var color: Color = Brand.accent
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+                Spacer()
+                Text(String(format: "%.0f%%", value))
+                    .font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
+            }
+            MiniBar(value: value / 100, color: color)
+        }
+        .frame(width: 104)
+    }
+}

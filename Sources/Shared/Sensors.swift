@@ -77,19 +77,31 @@ final class CPUMonitor {
 
 struct GPUStats {
     var temperature: Double?
-    var utilization: Double?
+    var utilization: Double?      // Device Utilization %
+    var coreUtil: Double?         // GPU Core Utilization %
+    var memUtil: Double?          // GPU Memory Utilization %
     var frequencyMHz: Double?   // 有驱动的核显/独显可读到，无驱动（如 NVIDIA）为 nil
     var name: String = "未知"
 }
 
 func readGPUStats() -> GPUStats {
+    // NullMoth 的 NVIDIA 显卡节点类是 NVAccel；Apple/AMD 走 IOAccelerator。
+    // 优先 NVAccel（独显），拿不到温度再退回 IOAccelerator（核显 / AMD 独显）。
+    for cls in ["NVAccel", "IOAccelerator"] {
+        if let s = gpuStatsFromClass(cls) { return s }
+    }
+    return GPUStats()
+}
+
+private func gpuStatsFromClass(_ className: String) -> GPUStats? {
     var stats = GPUStats()
     var iter: io_iterator_t = 0
     let kr = IOServiceGetMatchingServices(kIOMainPortDefault,
-                                          IOServiceMatching("IOAccelerator"), &iter)
-    guard kr == KERN_SUCCESS else { return stats }
+                                          IOServiceMatching(className), &iter)
+    guard kr == KERN_SUCCESS else { return nil }
     defer { IOObjectRelease(iter) }
 
+    var found = false
     while true {
         let svc = IOIteratorNext(iter)
         guard svc != IO_OBJECT_NULL else { break }
@@ -98,39 +110,41 @@ func readGPUStats() -> GPUStats {
         guard let props = IORegistryEntryCreateCFProperty(
                 svc, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0) else { continue }
         guard let dict = props.takeRetainedValue() as? [String: Any] else { continue }
+        guard let t = dict["Temperature(C)"] as? Double, t > 0 else { continue }
 
-        if let t = dict["Temperature(C)"] as? Double, t > 0 {
-            stats.temperature = t
-            stats.utilization = dict["Device Utilization %"] as? Double
-            // 有驱动的显卡（如 Intel 核显、某些 AMD 独显）能拿到频率；
-            // NVIDIA 在 macOS 无驱动时 PerformanceStatistics 整个为空，这里自然为 nil
-            stats.frequencyMHz = (dict["Core Frequency(MHz)"] as? Double)
-                ?? (dict["GPU Frequency(MHz)"] as? Double)
-                ?? (dict["Core Clock(MHz)"] as? Double)
+        stats.temperature = t
+        stats.utilization   = dict["Device Utilization %"] as? Double
+        stats.coreUtil     = dict["GPU Core Utilization %"] as? Double
+        stats.memUtil      = dict["GPU Memory Utilization %"] as? Double
+        // 有驱动的显卡（如 Intel 核显、AMD 独显）能拿到频率；
+        // NVIDIA（NullMoth）在 macOS 无频率键，这里自然为 nil
+        stats.frequencyMHz = (dict["Core Frequency(MHz)"] as? Double)
+            ?? (dict["GPU Frequency(MHz)"] as? Double)
+            ?? (dict["Core Clock(MHz)"] as? Double)
 
-            // 尽量拿到设备名
-            var name = "GPU"
-            var parent: io_registry_entry_t = svc
-            for _ in 0..<4 {
-                var parentOut: io_registry_entry_t = 0
-                let r = IORegistryEntryGetParentEntry(parent, kIOServicePlane, &parentOut)
-                if r != KERN_SUCCESS { break }
-                if let m = IORegistryEntryCreateCFProperty(parentOut, "model" as CFString,
-                                                           kCFAllocatorDefault, 0) {
-                    if let d = m.takeRetainedValue() as? Data,
-                       let s = String(data: d, encoding: .ascii) {
-                        name = s.trimmingCharacters(in: .controlCharacters)
-                        IOObjectRelease(parentOut)
-                        break
-                    }
+        // 尽量拿到设备名
+        var name = "GPU"
+        var parent: io_registry_entry_t = svc
+        for _ in 0..<4 {
+            var parentOut: io_registry_entry_t = 0
+            let r = IORegistryEntryGetParentEntry(parent, kIOServicePlane, &parentOut)
+            if r != KERN_SUCCESS { break }
+            if let m = IORegistryEntryCreateCFProperty(parentOut, "model" as CFString,
+                                                       kCFAllocatorDefault, 0) {
+                if let d = m.takeRetainedValue() as? Data,
+                   let s = String(data: d, encoding: .ascii) {
+                    name = s.trimmingCharacters(in: .controlCharacters)
+                    IOObjectRelease(parentOut)
+                    break
                 }
-                parent = parentOut
             }
-            stats.name = name
-            break
+            parent = parentOut
         }
+        stats.name = name
+        found = true
+        break
     }
-    return stats
+    return found ? stats : nil
 }
 
 // MARK: - 内存
