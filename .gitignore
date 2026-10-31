@@ -1,0 +1,20 @@
+# ===== 构建产物 =====
+Build/
+*.app
+DerivedData/
+
+# ===== 本机专属 / 敏感备份 =====
+# Backup/ 含 EFI 备份（config.plist 可能带序列号 / MLB / ROM），切勿上传
+Backup/
+# Downloads/ 是第三方 kext 压缩包等，非源码
+Downloads/
+
+# ===== WorkBuddy 项目数据 =====
+.workbuddy/
+
+# ===== macOS 垃圾文件 =====
+.DS_Store
+.AppleDouble
+.AppleDB
+.Spotlight-V100
+.Trashes
