@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GHelper UI 原型 · 全页仪表化</title>
+<style>
+:root{
+  --page:#EDEEEC; --bg:#F7F9F8; --surface:#FFFFFF; --surface2:#F1F5F3;
+  --text:#0E1B18; --text2:#5F6B67; --text3:#8C9895;
+  --border:rgba(14,27,24,.10); --border2:rgba(14,27,24,.06);
+  --accent:#1D9E75; --accent2:#5DCAA5; --soft:#E1F5EE; --onaccent:#FFFFFF;
+  --warn:#BA7517; --warnsoft:#FAEEDA; --danger:#A32D2D; --dangersoft:#FCEBEB;
+  --track:rgba(14,27,24,.12);
+}
+body.dark{
+  --page:#070C0B; --bg:#0B1412; --surface:#12201D; --surface2:#162622;
+  --text:#E6EFEC; --text2:#9DB0AA; --text3:#6E807A;
+  --border:rgba(255,255,255,.10); --border2:rgba(255,255,255,.06);
+  --accent:#5DCAA5; --accent2:#1D9E75; --soft:rgba(93,202,165,.16); --onaccent:#08120F;
+  --warn:#EF9F27; --warnsoft:rgba(239,159,39,.16); --danger:#F09595; --dangersoft:rgba(240,149,149,.16);
+  --track:rgba(255,255,255,.14);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",system-ui,sans-serif;padding:28px 20px;display:flex;justify-content:center;color:var(--text)}
+.window{width:940px;max-width:100%;background:var(--bg);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.titlebar{display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid var(--border)}
+.logo{width:24px;height:24px;border-radius:7px;background:var(--accent);display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.brand{font-size:14px;font-weight:600}
+.ver{font-size:11px;color:var(--text3)}
+.pills{margin-left:auto;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.pill{font-size:11px;padding:4px 10px;border-radius:999px;background:var(--surface2);color:var(--text2);white-space:nowrap}
+.pill.on{background:var(--soft);color:var(--accent);font-weight:600}
+.pill.hot{background:var(--warnsoft);color:var(--warn)}
+.pill.bad{background:var(--dangersoft);color:var(--danger)}
+.themebtn{margin-left:10px;font-size:11px;padding:4px 11px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-family:inherit}
+.themebtn:hover{border-color:var(--accent);color:var(--accent)}
+.tabs{display:flex;gap:3px;padding:9px 18px;border-bottom:1px solid var(--border)}
+.tab{font-size:13px;padding:5px 12px;border-radius:999px;color:var(--text2);cursor:pointer;user-select:none}
+.tab:hover{background:var(--surface2)}
+.tab.active{background:var(--soft);color:var(--accent);font-weight:600}
+.content{padding:16px 18px 20px;min-height:520px}
+.page{display:none}
+.page.active{display:block}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.card.span2{grid-column:span 2}
+.chead{display:flex;align-items:center;margin-bottom:10px}
+.clabel{font-size:13px;color:var(--text2)}
+.cnote{margin-left:auto;font-size:11px;color:var(--text3)}
+.big{font-size:30px;font-weight:600;line-height:1.1;letter-spacing:-.5px}
+.big small{font-size:14px;font-weight:500;color:var(--text2);margin-left:2px}
+.sub{font-size:11px;color:var(--text3);margin-top:3px}
+.spark{width:100%;height:56px;margin-top:10px;display:block}
+.rings{display:flex;gap:30px;align-items:center;flex-wrap:wrap;padding:4px 0 2px}
+.ring{width:92px;height:92px;flex:0 0 auto}
+.ringbg{fill:none;stroke:var(--track);stroke-width:8}
+.ringfg{fill:none;stroke:var(--accent);stroke-width:8;stroke-linecap:round;transform:rotate(-90deg);transform-origin:46px 46px;transition:stroke-dashoffset .6s ease}
+.ringval{font-size:17px;font-weight:600;fill:var(--text);text-anchor:middle}
+.ringsub{font-size:10px;fill:var(--text3);text-anchor:middle}
+.rtitle{font-size:13px;font-weight:600}
+.rsub{font-size:11px;color:var(--text3);margin-top:2px}
+.bar{height:6px;border-radius:999px;background:var(--track);overflow:hidden;margin-top:10px}
+.bar>i{display:block;height:100%;background:var(--accent);border-radius:999px}
+.seg{display:flex;gap:4px;background:var(--surface2);padding:3px;border-radius:999px}
+.seg>span{font-size:12px;padding:5px 13px;border-radius:999px;color:var(--text2);cursor:pointer;user-select:none}
+.seg>span.active{background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+body.dark .seg>span.active{background:var(--accent);color:var(--onaccent)}
+.row{display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--border2);font-size:12px}
+.row:last-child{border-bottom:none}
+.row .k{color:var(--text2)}
+.row .v{margin-left:auto;font-weight:500;text-align:right}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block;margin-right:7px}
+.dot.warn{background:var(--warn)}
+.dot.off{background:var(--track)}
+.switch{width:42px;height:24px;border-radius:999px;background:var(--track);position:relative;cursor:pointer;transition:background .2s;flex:0 0 auto}
+.switch.on{background:var(--accent)}
+.switch>i{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s}
+.switch.on>i{left:21px}
+input[type=range]{width:100%;-webkit-appearance:none;height:5px;border-radius:999px;background:var(--track);outline:none;margin:12px 0 6px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--surface)}
+.btn{font-size:12px;padding:7px 16px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-family:inherit}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--onaccent);border-color:transparent;font-weight:600}
+.note{font-size:11px;color:var(--text3);line-height:1.6;margin-top:10px}
+.note.warn{color:var(--warn)}
+.hint{font-size:11px;color:var(--text3);margin-top:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="logo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M12 12 L12 4"/><path d="M12 12 L19.5 16"/><path d="M12 12 L4.5 16"/><circle cx="12" cy="12" r="2.2" fill="#fff" stroke="none"/></svg></div>
+    <span class="brand">GHelper</span>
+    <span class="ver">v1.4.2</span>
+    <div class="pills">
+      <span class="pill on" id="pillBoost">睿频 开</span>
+      <span class="pill" id="pillTemp">CPU 61°C</span>
+      <span class="pill" id="pillFan">风扇 6100</span>
+      <button class="themebtn" id="themeBtn">切换深色</button>
+    </div>
+  </div>
+  <div class="tabs">
+    <span class="tab active" data-page="monitor">监控</span>
+    <span class="tab" data-page="fan">风扇</span>
+    <span class="tab" data-page="batt">电池</span>
+    <span class="tab" data-page="hw">硬件</span>
+    <span class="tab" data-page="set">设置</span>
+  </div>
+  <div class="content">
+
+    <div class="page active" id="monitor">
+      <div class="grid">
+        <div class="card">
+          <div class="chead"><span class="clabel">处理器</span><span class="cnote">近 60 秒</span></div>
+          <div class="big"><span id="cpuTemp">61</span><small>°C</small></div>
+          <div class="sub"><span id="cpuFreq">5.04</span> GHz · Ryzen 9 7940HX · 32 核</div>
+          <canvas class="spark" id="sparkCpu"></canvas>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">显卡</span></div>
+          <div class="big"><span id="gpuTemp">63</span><small>°C</small></div>
+          <div class="sub">RTX 4060 Laptop GPU · 8 GB</div>
+          <div class="pills" style="margin:12px 0 0">
+            <span class="pill">占用 44%</span>
+            <span class="pill">频率 不适用</span>
+          </div>
+          <div class="note">NVIDIA 在 macOS 无官方驱动，频率无法读取</div>
+        </div>
+        <div class="card span2">
+          <div class="chead"><span class="clabel">风扇</span><span class="cnote">CPU 曲线模式 · GPU 固件自动</span></div>
+          <div class="rings">
+            <div style="display:flex;align-items:center;gap:14px">
+              <svg class="ring" viewBox="0 0 92 92">
+                <circle class="ringbg" cx="46" cy="46" r="38"></circle>
+                <circle class="ringfg" id="ringCpu" cx="46" cy="46" r="38" stroke-dasharray="239" stroke-dashoffset="20"></circle>
+                <text class="ringval" x="46" y="44" id="fanCpuTxt">6100</text>
+                <text class="ringsub" x="46" y="60">RPM · 92%</text>
+              </svg>
+              <div><div class="rtitle">CPU 风扇</div><div class="rsub">曲线 · 目标 6100</div></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px">
+              <svg class="ring" viewBox="0 0 92 92">
+                <circle class="ringbg" cx="46" cy="46" r="38"></circle>
+                <circle class="ringfg" id="ringGpu" cx="46" cy="46" r="38" stroke-dasharray="239" stroke-dashoffset="158" style="stroke:var(--accent2)"></circle>
+                <text class="ringval" x="46" y="44" id="fanGpuTxt">2100</text>
+                <text class="ringsub" x="46" y="60">RPM · 34%</text>
+              </svg>
+              <div><div class="rtitle">GPU 风扇</div><div class="rsub">固件接管 · 62°C</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">内存</span></div>
+          <div class="big">18.4<small>/ 32 GB</small></div>
+          <div class="sub">已用 58% · 压力 正常</div>
+          <div class="bar"><i style="width:58%"></i></div>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">电池</span></div>
+          <div class="big">85<small>%</small></div>
+          <div class="sub">充电中 · 健康度 96% · 循环 128 次</div>
+          <div class="bar"><i style="width:85%"></i></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" id="fan">
+      <div class="grid">
+        <div class="card span2">
+          <div class="chead"><span class="clabel">CPU 风扇</span><span class="cnote">当前 6100 RPM</span></div>
+          <div class="seg" id="segCpu">
+            <span data-mode="auto">固件自动</span>
+            <span class="active" data-mode="curve">曲线</span>
+            <span data-mode="manual">手动</span>
+          </div>
+          <div id="curveBox" style="margin-top:14px">
+            <div class="sub">温度 → 转速曲线（实时 61°C 对应 6100 RPM）</div>
+            <canvas class="spark" id="sparkCurve" style="height:90px"></canvas>
+            <div class="note">75°C → 65% · 82°C → 75% 封顶</div>
+          </div>
+          <div id="manualBox" style="display:none;margin-top:14px">
+            <div class="sub">手动占空比 <b id="pctVal">75%</b></div>
+            <input type="range" id="pctRange" min="5" max="75" value="75">
+            <div class="note">驱动封顶 75%（实测 6100 RPM），GPU 风扇不支持手动</div>
+          </div>
+        </div>
+        <div class="card span2">
+          <div class="chead"><span class="clabel">GPU 风扇</span><span class="cnote">固件自动</span></div>
+          <div class="seg"><span class="active">固件自动</span></div>
+          <div class="note warn">本机 GPU 风扇手动接管后会停转（AsusFanSMC 限制），已自动交回固件按温度调度，当前 2100 RPM。</div>
+          <div style="margin-top:12px"><button class="btn primary">应用</button> <button class="btn">恢复固件自动</button></div>
+        </div>
+      </div>
+      <div class="hint">风扇变更由 root 助手写入 SMC，看门狗 15 秒无心跳会交回固件</div>
+    </div>
+
+    <div class="page" id="batt">
+      <div class="grid">
+        <div class="card" style="display:flex;align-items:center;gap:18px">
+          <svg class="ring" viewBox="0 0 92 92" style="width:110px;height:110px">
+            <circle class="ringbg" cx="46" cy="46" r="38" stroke-width="9"></circle>
+            <circle class="ringfg" cx="46" cy="46" r="38" stroke-width="9" stroke-dasharray="239" stroke-dashoffset="36"></circle>
+            <text class="ringval" x="46" y="45" style="font-size:20px">85%</text>
+            <text class="ringsub" x="46" y="61">充电中</text>
+          </svg>
+          <div>
+            <div class="rtitle">电量</div>
+            <div class="rsub">电源适配器已连接</div>
+            <div class="pills" style="margin:10px 0 0"><span class="pill on">充电中</span><span class="pill">剩余 1 小时 12 分</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">电池健康</span></div>
+          <div class="big">96<small>%</small></div>
+          <div class="sub">循环 128 次 · 设计容量 90 Wh</div>
+          <div class="bar"><i style="width:96%"></i></div>
+        </div>
+        <div class="card span2">
+          <div class="chead"><span class="clabel">电源</span></div>
+          <div class="row"><span class="k">当前电量</span><span class="v">85%</span></div>
+          <div class="row"><span class="k">充电状态</span><span class="v"> charging</span></div>
+          <div class="row"><span class="k">电源适配器</span><span class="v">已连接 · 240 W</span></div>
+          <div class="row"><span class="k">低电量模式</span><span class="v">关闭</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" id="hw">
+      <div class="grid">
+        <div class="card">
+          <div class="chead"><span class="clabel">机型</span></div>
+          <div class="big" style="font-size:22px">MacBookPro16,4</div>
+          <div class="sub">华硕 ROG · 黑苹果（VirtualSMC 已加载）</div>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">处理器</span></div>
+          <div class="big" style="font-size:22px">Ryzen 9 7940HX</div>
+          <div class="sub">16 核 32 线程 · AMD</div>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">内存</span></div>
+          <div class="big">32<small>GB</small></div>
+          <div class="sub">16 GB × 2 · DDR5</div>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">显卡</span></div>
+          <div class="big" style="font-size:22px">RTX 4060</div>
+          <div class="sub">Laptop GPU · 8 GB</div>
+        </div>
+        <div class="card span2">
+          <div class="chead"><span class="clabel">驱动加载状态</span><span class="cnote">已加载 7 / 7</span></div>
+          <div class="row"><span class="k"><i class="dot"></i>VirtualSMC</span><span class="v" style="color:var(--accent)">已加载</span></div>
+          <div class="row"><span class="k"><i class="dot"></i>Lilu</span><span class="v" style="color:var(--accent)">已加载</span></div>
+          <div class="row"><span class="k"><i class="dot"></i>WhateverGreen</span><span class="v" style="color:var(--accent)">已加载</span></div>
+          <div class="row"><span class="k"><i class="dot"></i>AppleALC</span><span class="v" style="color:var(--accent)">已加载</span></div>
+          <div class="row"><span class="k"><i class="dot"></i>AMDRyzenCPUPowerManagement</span><span class="v" style="color:var(--accent)">已加载</span></div>
+          <div class="row"><span class="k"><i class="dot"></i>SMCAMDProcessor</span><span class="v" style="color:var(--accent)">已加载</span></div>
+          <div class="row"><span class="k"><i class="dot"></i>AsusFanSMC</span><span class="v" style="color:var(--accent)">已加载</span></div>
+        </div>
+        <div class="card span2">
+          <div class="chead"><span class="clabel">系统</span></div>
+          <div class="row"><span class="k">macOS 版本</span><span class="v">26.7.1</span></div>
+          <div class="row"><span class="k">OpenCore</span><span class="v">已检测</span></div>
+          <div class="row"><span class="k">SMC 键数</span><span class="v">107</span></div>
+          <div class="row"><span class="k">启动参数</span><span class="v">debug=0x144</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" id="set">
+      <div class="grid">
+        <div class="card span2">
+          <div class="chead"><span class="clabel">温度校准</span><span class="cnote">实测对比 Windows 后调整</span></div>
+          <div class="sub">CPU 偏移 <b id="offVal">-13</b> ℃（原始 74℃ → 显示 61℃）</div>
+          <input type="range" id="offRange" min="-50" max="10" value="-13">
+          <div class="note">SMCAMDProcessor 读数偏高，用 Windows 下 HWiNFO 的基准温差校准</div>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">睿频开关</span></div>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:4px">
+            <div class="switch on" id="swBoost"><i></i></div>
+            <div><div class="rtitle">跑满</div><div class="rsub">上限 5250 MHz</div></div>
+          </div>
+          <div class="note" style="color:var(--accent)">已锁定睿频上限 5250 MHz</div>
+        </div>
+        <div class="card">
+          <div class="chead"><span class="clabel">开机自启</span></div>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:4px">
+            <div class="switch on" id="swLogin"><i></i></div>
+            <div><div class="rtitle">已开启</div><div class="rsub">LaunchAgent 登录启动</div></div>
+          </div>
+          <div class="note">菜单栏常驻，开机自动接管风扇</div>
+        </div>
+        <div class="card span2">
+          <div class="chead"><span class="clabel">睿频前置</span><span class="cnote">debug=0x144</span></div>
+          <div class="row"><span class="k"><i class="dot"></i>OpenCore boot-args</span><span class="v" style="color:var(--accent)">已配置</span></div>
+          <div class="row"><span class="k">助手</span><span class="v" style="color:var(--accent)">已安装并运行</span></div>
+          <div style="margin-top:12px;display:flex;gap:8px"><button class="btn">重新安装助手</button><button class="btn">检测并配置</button></div>
+        </div>
+        <div class="card span2">
+          <div class="chead"><span class="clabel">版本与更新</span></div>
+          <div class="row"><span class="k">当前版本</span><span class="v">1.4.2</span></div>
+          <div class="row"><span class="k">最新发布</span><span class="v" style="color:var(--accent)">已是最新</span></div>
+          <div style="margin-top:12px"><button class="btn">检查更新</button></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script>
+function cssv(n){return getComputedStyle(document.body).getPropertyValue(n).trim()}
+document.querySelectorAll('.tab').forEach(function(t){
+  t.addEventListener('click',function(){
+    document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active')});
+    document.querySelectorAll('.page').forEach(function(x){x.classList.remove('active')});
+    t.classList.add('active');
+    document.getElementById(t.dataset.page).classList.add('active');
+    drawAll();
+  });
+});
+var dark=false;
+document.getElementById('themeBtn').addEventListener('click',function(){
+  dark=!dark;
+  document.body.classList.toggle('dark',dark);
+  this.textContent=dark?'切换浅色':'切换深色';
+  drawAll();
+});
+document.querySelectorAll('.switch').forEach(function(s){
+  s.addEventListener('click',function(){s.classList.toggle('on')});
+});
+document.getElementById('offRange').addEventListener('input',function(){
+  document.getElementById('offVal').textContent=this.value;
+});
+document.getElementById('pctRange').addEventListener('input',function(){
+  document.getElementById('pctVal').textContent=this.value+'%';
+});
+var segCpu=document.getElementById('segCpu');
+segCpu.querySelectorAll('span').forEach(function(s){
+  s.addEventListener('click',function(){
+    segCpu.querySelectorAll('span').forEach(function(x){x.classList.remove('active')});
+    s.classList.add('active');
+    var m=s.dataset.mode;
+    document.getElementById('curveBox').style.display=m==='curve'?'block':'none';
+    document.getElementById('manualBox').style.display=m==='manual'?'block':'none';
+    drawAll();
+  });
+});
+var cpuHist=[58,59,58,60,61,60,59,61,62,61,60,61,61,62,61,60,61,62,61,60,61,61,62,61,60,61,61,60,61,62];
+var curveData=[[40,20],[50,28],[60,45],[68,60],[75,65],[82,75],[90,75]];
+function fitCanvas(c){
+  var dpr=window.devicePixelRatio||1;
+  var w=c.clientWidth||520,h=parseInt(c.style.height||56);
+  c.width=w*dpr;c.height=h*dpr;
+  var ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);
+  return {ctx:ctx,w:w,h:h};
+}
+function drawSpark(id,data,fill,stroke,min,max){
+  var c=document.getElementById(id);if(!c)return;
+  var f=fitCanvas(c),ctx=f.ctx,w=f.w,h=f.h;
+  ctx.clearRect(0,0,w,h);
+  var lo=min!==undefined?min:Math.min.apply(null,data)-2;
+  var hi=max!==undefined?max:Math.max.apply(null,data)+2;
+  var pts=data.map(function(v,i){return [i*(w/(data.length-1)),h-((v-lo)/(hi-lo))*h*0.9-h*0.05]});
+  ctx.beginPath();ctx.moveTo(0,h);
+  pts.forEach(function(p){ctx.lineTo(p[0],p[1])});
+  ctx.lineTo(w,h);ctx.closePath();ctx.fillStyle=fill;ctx.fill();
+  ctx.beginPath();
+  pts.forEach(function(p,i){i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])});
+  ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.lineJoin='round';ctx.stroke();
+}
+function drawCurve(){
+  var c=document.getElementById('sparkCurve');if(!c)return;
+  var f=fitCanvas(c),ctx=f.ctx,w=f.w,h=f.h;
+  ctx.clearRect(0,0,w,h);
+  var xs=curveData.map(function(d){return d[0]}),ys=curveData.map(function(d){return d[1]});
+  var x0=Math.min.apply(null,xs)-4,x1=Math.max.apply(null,xs)+4,y0=0,y1=100;
+  var pts=curveData.map(function(d){return [(d[0]-x0)/(x1-x0)*w,h-((d[1]-y0)/(y1-y0))*h*0.88-h*0.06]});
+  ctx.strokeStyle=cssv('--border');ctx.lineWidth=1;
+  [0.25,0.5,0.75].forEach(function(g){
+    var y=h*g;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();
+  });
+  ctx.beginPath();ctx.moveTo(0,h);
+  pts.forEach(function(p){ctx.lineTo(p[0],p[1])});
+  ctx.lineTo(w,h);ctx.closePath();
+  ctx.fillStyle=cssv('--soft');ctx.fill();
+  ctx.beginPath();
+  pts.forEach(function(p,i){i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])});
+  ctx.strokeStyle=cssv('--accent');ctx.lineWidth=2.5;ctx.lineJoin='round';ctx.stroke();
+  var cur=pts[3];
+  ctx.beginPath();ctx.arc(cur[0],cur[1],5,0,6.284);
+  ctx.fillStyle=cssv('--accent');ctx.fill();
+  ctx.strokeStyle=cssv('--surface');ctx.lineWidth=2;ctx.stroke();
+}
+function setRing(id,txtId,rpm,maxRpm){
+  var r=document.getElementById(id);if(!r)return;
+  var C=239,pct=Math.max(0,Math.min(1,rpm/maxRpm));
+  r.setAttribute('stroke-dashoffset',String(C*(1-pct)));
+  document.getElementById(txtId).textContent=Math.round(rpm);
+}
+function drawAll(){
+  drawSpark('sparkCpu',cpuHist,cssv('--soft'),cssv('--accent'));
+  drawCurve();
+  setRing('ringCpu','fanCpuTxt',state.fanCpu,6600);
+  setRing('ringGpu','fanGpuTxt',state.fanGpu,6200);
+}
+var state={temp:61,freq:5.04,fanCpu:6100,fanGpu:2100};
+function tick(){
+  state.temp=61+(Math.random()*4-2);
+  state.freq=Math.max(2.4,5.04+(Math.random()*0.5-0.25));
+  state.fanCpu=6100+(Math.random()*300-150);
+  state.fanGpu=2100+(Math.random()*120-60);
+  cpuHist.push(state.temp);cpuHist.shift();
+  document.getElementById('cpuTemp').textContent=state.temp.toFixed(0);
+  document.getElementById('cpuFreq').textContent=state.freq.toFixed(2);
+  document.getElementById('pillTemp').textContent='CPU '+state.temp.toFixed(0)+'°C';
+  document.getElementById('pillFan').textContent='风扇 '+Math.round(state.fanCpu);
+  var p=document.getElementById('pillTemp');
+  p.className='pill'+(state.temp>=82?' bad':state.temp>=72?' hot':'');
+  drawAll();
+}
+drawAll();
+setInterval(tick,1500);
+window.addEventListener('resize',drawAll);
+</script>
+</body>
+</html>

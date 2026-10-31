@@ -29,6 +29,12 @@ final class AppModel: ObservableObject {
     @Published var gpuTemperature: Double?
     @Published var cpuTempKey: String?        // 命中的 CPU 温度 SMC 键，nil 表示没有
 
+    // 温度走势（近 60 个采样，供监控页迷你折线）
+    @Published var tempHistory: [Double] = []
+
+    // CPU 每逻辑核心（线程）占用（0…100），长度 = 逻辑核数
+    @Published var coreLoads: [Double] = []
+
     // 风扇控制（每把扇独立：CPU 风扇 / GPU 风扇 各自一份）
     @Published var controls: [FanRole: FanControl] = [
         .cpu: FanControl(mode: .auto, tempSource: .cpuSMC, manualPercent: 55,
@@ -101,6 +107,7 @@ final class AppModel: ObservableObject {
     var helper = HelperClient()
     private let smc = SMC.shared
     private let cpuMonitor = CPUMonitor()
+    private let coreMonitor = CoreMonitor()
     private var pollTimer: Timer?
     private var fanTimer: Timer?
     private var freqTimer: Timer?
@@ -190,6 +197,7 @@ final class AppModel: ObservableObject {
 
     func refresh() {
         cpuUsage = cpuMonitor.sample()
+        coreLoads = coreMonitor.sample()
         memory = readMemoryStats()
         gpu = readGPUStats()
         gpuTemperature = gpu.temperature
@@ -203,7 +211,18 @@ final class AppModel: ObservableObject {
             cpuTemperatureRaw = nil
             cpuTemperature = nil
         }
+
+        // 温度走势缓冲（近 60 点）
+        if let t = cpuTemperature {
+            tempHistory.append(t)
+        } else if let last = tempHistory.last {
+            tempHistory.append(last)
+        }
+        if tempHistory.count > 60 { tempHistory.removeFirst() }
     }
+
+    /// 当前主温度（优先 CPU，其次 GPU），走势图/状态共用
+    var primaryTemperature: Double? { cpuTemperature ?? gpuTemperature }
 
     /// CPU 实时频率：走 root 助手（powermetrics 需要 root）。读不到时为 nil。
     func refreshFrequency() {

@@ -31,12 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let model = AppModel.shared
 
-        // 弹出面板（菜单栏快速视图）：传入「展开到窗口」回调
-        let popoverView = RootView(showWindowAction: { [weak self] in self?.showMainWindow() })
+        // 弹出面板（菜单栏快速视图）：紧凑仪表盘，传入「展开到窗口」回调
+        let popoverView = PopoverDashboard(showWindowAction: { [weak self] in self?.showMainWindow() })
             .environmentObject(model)
         let hosting = NSHostingController(rootView: popoverView)
         popover.contentViewController = hosting
-        popover.contentSize = NSSize(width: 380, height: 540)
+        popover.contentSize = NSSize(width: 320, height: 470)
         popover.behavior = .transient
         popover.animates = true
 

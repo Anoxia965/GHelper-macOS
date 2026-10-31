@@ -10,7 +10,7 @@ BUILD="Build"
 APPDIR="$BUILD/$APP_NAME.app"
 CONTENTS="$APPDIR/Contents"
 
-SRC_SHARED="Sources/Shared/SMC.swift Sources/Shared/HelperProtocol.swift Sources/Shared/Sensors.swift Sources/Shared/Shell.swift"
+SRC_SHARED="Sources/Shared/SMC.swift Sources/Shared/HelperProtocol.swift Sources/Shared/Sensors.swift Sources/Shared/Shell.swift Sources/Shared/CoreMonitor.swift"
 
 echo "▸ 编译特权助手…"
 swiftc -O $SRC_SHARED Sources/Helper/main.swift \
@@ -22,6 +22,7 @@ swiftc -O $SRC_SHARED Sources/App/FanCurve.swift \
        Sources/App/UpdateChecker.swift \
        Sources/App/AppModel.swift \
        Sources/App/Views.swift \
+       Sources/App/Components.swift \
        Sources/Shared/Hardware.swift \
        Sources/App/AppDelegate.swift \
        Sources/App/AppMain.swift \
