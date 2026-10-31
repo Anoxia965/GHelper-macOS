@@ -94,16 +94,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         popover.performClose(nil)
         if mainWindow == nil {
             let win = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 820, height: 620),
+                contentRect: NSRect(x: 0, y: 0, width: 1120, height: 740),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered, defer: false)
             win.title = "GHelper"
-            win.minSize = NSSize(width: 640, height: 480)
+            win.minSize = NSSize(width: 820, height: 560)
             win.contentViewController = NSHostingController(
                 rootView: RootView(showWindowAction: nil).environmentObject(AppModel.shared))
             win.isReleasedWhenClosed = false
             win.delegate = self
             win.collectionBehavior = [.managed, .fullScreenAuxiliary]
+            win.setFrameAutosaveName("GHelperMainWindow") // 记住位置/大小，不再每次落到左下角
+            win.center() // 首次打开居中于主屏幕
             mainWindow = win
         }
         mainWindow?.makeKeyAndOrderFront(nil)
