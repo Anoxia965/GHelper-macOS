@@ -143,6 +143,147 @@ final class HelperService: NSObject, HelperProtocol {
         return maxMHz
     }
 
+    // MARK: - 睿频模式（zenmaster / SMU）
+
+    /// 候选的 python3 解释器（用于调 zenmaster）。
+    /// 顺序不重要——zenmasterPython() 会逐个真正 `import zenmaster` 验证后再选，
+    /// 避免选到没有 zenmaster 的系统 python（如 /usr/bin/python3 3.9.6）。
+    private let zenmasterPythonCandidates = [
+        "/Library/PrivilegedHelperTools/zenmaster-venv/bin/python3",
+        "/usr/bin/python3",
+        "/usr/local/bin/python3",
+        "/opt/homebrew/bin/python3",
+        "/Users/anoxia-m/.workbuddy/binaries/python/versions/3.13.12/bin/python3"
+    ]
+
+    /// 返回第一个能真正 `import zenmaster` 的 python 解释器路径（LaunchDaemon 环境无用户 PATH，必须实测）。
+    private func zenmasterPython() -> String? {
+        for p in zenmasterPythonCandidates where FileManager.default.isExecutableFile(atPath: p) {
+            let t = Process()
+            t.launchPath = p
+            t.arguments = ["-c", "import zenmaster"]
+            t.standardError = Pipe()   // 丢弃输出，只看退出码
+            try? t.run(); t.waitUntilExit()
+            if t.terminationStatus == 0 { return p }
+        }
+        // 退回 PATH 查找（仅当上面都失败时）
+        let t = Process()
+        t.launchPath = "/usr/bin/which"
+        t.arguments = ["python3"]
+        let pipe = Pipe()
+        t.standardOutput = pipe
+        try? t.run(); t.waitUntilExit()
+        if let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                            encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !out.isEmpty, FileManager.default.isExecutableFile(atPath: out) {
+            return out
+        }
+        return nil
+    }
+
+    /// 跑一次 zenmaster，返回 (退出码, 标准输出, 错误输出)
+    private func runZenmaster(_ py: String, _ args: [String]) -> (Int, String, String) {
+        let task = Process()
+        task.launchPath = py
+        task.arguments = ["-m", "zenmaster"] + args
+        let out = Pipe(), err = Pipe()
+        task.standardOutput = out
+        task.standardError = err
+        try? task.run()
+        task.waitUntilExit()
+        let o = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (Int(task.terminationStatus), o, e)
+    }
+
+    /// 读基础频率（MHz）：sysctl hw.cpufrequency 返回 Hz，转 MHz。通用，不依赖型号。
+    private static func sysctlBaseMHz() -> Double {
+        let task = Process()
+        task.launchPath = "/usr/sbin/sysctl"
+        task.arguments = ["-n", "hw.cpufrequency"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        try? task.run(); task.waitUntilExit()
+        guard let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                             encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let hz = Double(s) else { return 0 }
+        return hz / 1_000_000.0
+    }
+
+    /// 读取 CPU 最大睿频（MHz），用 zenmaster 自带探测，通用。后端未就绪时返回 nil。
+    private func queryMaxMHz(_ py: String) -> Double? {
+        let (code, o, e) = runZenmaster(py, ["--iopci", "--get-max-cpu-clk"])
+        let text = o + e
+        guard let re = try? NSRegularExpression(pattern: #"(\d{2,5}(?:\.\d+)?)"#) else { return nil }
+        let ns = text as NSString
+        let ms = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        for m in ms where m.numberOfRanges > 1 {
+            let s = ns.substring(with: m.range(at: 1))
+            guard let v = Double(s) else { continue }
+            // 容错：有的 SMU 返回 GHz 小数（如 5.2），换算成 MHz
+            let mhz = v < 1000 ? v * 1000 : v
+            if mhz >= 1000 { return mhz }
+        }
+        return code == 0 ? nil : nil
+    }
+
+    private var boostReapplyTimer: Timer?
+    private var boostTargetMHz: Double = 0
+
+    func setBoostMode(enabled: Bool, reply: @escaping (Bool, String) -> Void) {
+        touch()
+        guard let py = zenmasterPython() else {
+            reply(false, "未找到 python3 / zenmaster：请在设置页重装助手，或手动 pip install zenmaster")
+            return
+        }
+        let base = Self.sysctlBaseMHz()
+        guard base > 0 else {
+            reply(false, "无法读取基础频率 (sysctl hw.cpufrequency)")
+            return
+        }
+
+        if enabled {
+            // 开：放开睿频上限到 CPU 最大睿频（跑满）
+            guard let max = queryMaxMHz(py) else {
+                reply(false, "无法读取最大睿频：zenmaster 后端未就绪。请确认 boot-args 含 debug=0x144，或已加载 DirectHW.kext 后重试。")
+                return
+            }
+            let (code, o, e) = runZenmaster(py, ["--iopci", "--set-boost-limit-frequency=\(Int(max))"])
+            if code != 0 {
+                let msg = (e.isEmpty ? o : e).trimmingCharacters(in: .whitespaces)
+                reply(false, "开启睿频失败：\(String(msg.prefix(200)))")
+                return
+            }
+            boostTargetMHz = max
+            startBoostReapply(py: py)
+            reply(true, "睿频已开启，上限 \(Int(max)) MHz（跑满）")
+        } else {
+            // 关：把睿频上限钉到基础频率（不睿频·降温）
+            let (code, o, e) = runZenmaster(py, ["--iopci", "--set-boost-limit-frequency=\(Int(base))"])
+            if code != 0 {
+                // 兜底：用 oc-clk 硬锁基础频率
+                let (c2, o2, e2) = runZenmaster(py, ["--iopci", "--oc-clk=\(Int(base))"])
+                if c2 != 0 {
+                    let msg = (e2.isEmpty ? o2 : e2).trimmingCharacters(in: .whitespaces)
+                    reply(false, "锁定默认频率失败：\(String(msg.prefix(200)))")
+                    return
+                }
+            }
+            boostTargetMHz = base
+            startBoostReapply(py: py)
+            reply(true, "已锁定默认频率 \(Int(base)) MHz（不睿频·降温）")
+        }
+    }
+
+    /// 每 30s 重涂一次，防止 macOS 热管理把睿频上限覆盖回去
+    private func startBoostReapply(py: String) {
+        boostReapplyTimer?.invalidate()
+        boostReapplyTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self = self, self.boostTargetMHz > 0 else { return }
+            _ = self.runZenmaster(py, ["--iopci", "--set-boost-limit-frequency=\(Int(self.boostTargetMHz))"])
+        }
+    }
+
     func readKey(_ key: String, reply: @escaping (NSNumber?, String) -> Void) {
         touch()
         if let v = smc.readDouble(key) {
@@ -175,6 +316,8 @@ final class HelperService: NSObject, HelperProtocol {
     }
 
     func uninstall(reply: @escaping (Bool, String) -> Void) {
+        boostReapplyTimer?.invalidate()
+        boostReapplyTimer = nil
         releaseAll()
         let script = """
         launchctl bootout system/\(kHelperMachServiceName) 2>/dev/null || \

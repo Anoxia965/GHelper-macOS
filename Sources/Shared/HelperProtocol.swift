@@ -29,6 +29,11 @@ let kHelperPlistPath = "/Library/LaunchDaemons/cn.anoxia.GHelper.helper.plist"
     /// 返回 (MHz, 状态描述)；读不到时返回 (0, 错误原因)。
     func readFrequency(reply: @escaping (Double, String) -> Void)
 
+    /// 设置 CPU 睿频模式（经 root 助手调 zenmaster 操作 SMU）。
+    /// enabled = true：放开睿频上限，CPU 跑满；false：把睿频上限钉到基础频率（不睿频·降温）。
+    /// 返回 (是否成功, 描述)。后端（debug=0x144 或 DirectHW）未就绪时返回失败并附带指引。
+    func setBoostMode(enabled: Bool, reply: @escaping (Bool, String) -> Void)
+
     /// 读取一个 SMC 键（走 root 通道，备用）
     func readKey(_ key: String, reply: @escaping (NSNumber?, String) -> Void)
 

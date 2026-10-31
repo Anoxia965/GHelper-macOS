@@ -135,6 +135,12 @@ private struct Bar: View {
 struct MonitorView: View {
     @EnvironmentObject var model: AppModel
 
+    /// 睿频开关绑定：开=跑满，关=锁默认频率（降温）
+    private var boostBinding: Binding<Bool> {
+        Binding(get: { model.boostEnabled },
+                set: { model.setBoost(enabled: $0) })
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             Card(title: "处理器") {
@@ -162,6 +168,19 @@ struct MonitorView: View {
                     }
                     .foregroundStyle(.orange)
                 }
+
+                Divider().padding(.vertical, 4)
+                Toggle("睿频模式（跑满）", isOn: boostBinding)
+                Text(model.boostEnabled
+                     ? "已开启：CPU 可睿频到上限"
+                     : "已关闭：锁定默认频率（不睿频 · 降温）")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                if !model.boostStatus.isEmpty {
+                    Text(model.boostStatus)
+                        .font(.system(size: 10))
+                        .foregroundStyle(model.boostStatus.hasPrefix("✓") ? .green : .red)
+                }
             }
 
             Card(title: "显卡 · \(model.hardware.gpus.first?.name ?? model.gpu.name)") {
@@ -183,6 +202,9 @@ struct MonitorView: View {
                 if model.hardware.gpuVRAM != "—" {
                     StatRow(label: "显存", value: model.hardware.gpuVRAM)
                 }
+                Text("NVIDIA 在 macOS 无官方驱动，故频率无法读取；占用/温度亦非官方驱动数据，此处仅可靠显示型号与显存。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Card(title: "内存") {

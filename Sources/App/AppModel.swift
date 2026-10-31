@@ -47,6 +47,14 @@ final class AppModel: ObservableObject {
     }
     @Published var lastApplyMessage: String = ""
 
+    // 睿频模式：true=跑满（放开上限），false=锁默认频率（降温）。持久化，默认开启。
+    @Published var boostEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(boostEnabled, forKey: Key.boost) }
+    }
+
+    /// 睿频开关的即时反馈（成功/失败都显示，解决「点了没反应」看不到结果的问题）
+    @Published var boostStatus: String = ""
+
     // MARK: 每把扇独立控制（绑定辅助）
 
     /// 按角色的通用字段绑定（模式 / 温度来源 / 手动转速）
@@ -116,6 +124,41 @@ final class AppModel: ObservableObject {
         }
         freqTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshFrequency() }
+        }
+
+        // 启动后按已存偏好重涂睿频模式（助手装好才生效）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.applyBoostOnLaunch()
+        }
+    }
+
+    // MARK: 睿频模式
+
+    /// 用户在 UI 切换睿频开关
+    func setBoost(enabled: Bool) {
+        boostEnabled = enabled
+        applyBoostNow()
+    }
+
+    /// 启动时按已存偏好重涂（不打扰用户）
+    func applyBoostOnLaunch() {
+        guard helper.isInstalled else { return }
+        applyBoostNow()
+    }
+
+    private func applyBoostNow() {
+        guard helper.isInstalled else {
+            boostStatus = "需先安装特权助手"
+            lastApplyMessage = "睿频开关需先安装特权助手"
+            return
+        }
+        boostStatus = "应用中…"
+        helper.setBoostMode(enabled: boostEnabled) { [weak self] ok, msg in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.lastApplyMessage = "睿频：\(msg)"
+                self.boostStatus = ok ? "✓ \(msg)" : "✗ \(msg)"
+            }
         }
     }
 
@@ -269,6 +312,7 @@ final class AppModel: ObservableObject {
     private enum Key {
         static let controls = "fanControls"
         static let offset = "cpuTempOffset"
+        static let boost = "boostEnabled"
     }
 
     private func save() {
@@ -309,6 +353,9 @@ final class AppModel: ObservableObject {
 
         // 只有用户确实设过才覆盖默认值（UserDefaults 没值时 double 返回 0，会误伤已存的 -13）
         if d.object(forKey: Key.offset) != nil { cpuTempOffset = d.double(forKey: Key.offset) }
+
+        // 睿频模式：默认开启（跑满），仅当用户显式设过才覆盖
+        if d.object(forKey: Key.boost) != nil { boostEnabled = d.bool(forKey: Key.boost) }
     }
 
     func resetCurve(_ role: FanRole) {

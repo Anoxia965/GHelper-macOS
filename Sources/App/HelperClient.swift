@@ -84,6 +84,11 @@ final class HelperClient: ObservableObject {
         }
     }
 
+    /// 切换睿频模式。enabled=true 跑满，false 锁默认频率（降温）
+    func setBoostMode(enabled: Bool, completion: @escaping (Bool, String) -> Void) {
+        proxy()?.setBoostMode(enabled: enabled, reply: completion)
+    }
+
     // MARK: 安装
 
     /// 用 osascript 弹系统密码框，一次性把助手装进去
@@ -122,6 +127,23 @@ final class HelperClient: ObservableObject {
         chmod 644 '\(kHelperPlistPath)'
         launchctl bootout system/\(kHelperMachServiceName) 2>/dev/null || launchctl unload -w '\(kHelperPlistPath)' 2>/dev/null
         launchctl bootstrap system '\(kHelperPlistPath)' 2>/dev/null || launchctl load -w '\(kHelperPlistPath)'
+        # 装 zenmaster 到固定路径 venv（助手在 LaunchDaemon 最小环境下也能找到，且不受系统 python 版本影响）
+        VENV=/Library/PrivilegedHelperTools/zenmaster-venv
+        VPY="$VENV/bin/python3"
+        if [ ! -x "$VPY" ] || ! "$VPY" -c "import zenmaster" 2>/dev/null; then
+          BASE=""
+          for cand in /Users/anoxia-m/.workbuddy/binaries/python/versions/3.13.12/bin/python3 \
+                      /usr/local/bin/python3 /usr/bin/python3 python3; do
+            if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys;sys.exit(0 if sys.version_info>=(3,10) else 1)" 2>/dev/null; then
+              BASE="$cand"; break
+            fi
+          done
+          [ -z "$BASE" ] && BASE=python3
+          rm -rf "$VENV"
+          "$BASE" -m venv "$VENV"
+        fi
+        "$VPY" -m pip install --quiet --upgrade pip 2>/dev/null
+        "$VPY" -m pip install --quiet zenmaster 2>/dev/null || true
         sleep 1
         echo installed
         """
