@@ -4,6 +4,7 @@
 
 import Foundation
 import SwiftUI
+import Combine
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -97,12 +98,13 @@ final class AppModel: ObservableObject {
     /// 物理风扇索引 → 角色标题（给监控页等展示用）
     func roleTitle(for index: Int) -> String { FanRole.from(index: index).rawValue }
 
-    let helper = HelperClient()
+    var helper = HelperClient()
     private let smc = SMC.shared
     private let cpuMonitor = CPUMonitor()
     private var pollTimer: Timer?
     private var fanTimer: Timer?
     private var freqTimer: Timer?
+    private var cancellables = Set<AnyCancellable>()
 
     /// SMCAMDProcessor 装好后可能出现的 CPU 温度键
     private static let cpuTempKeys = ["TC0P", "TC1P", "TC0D", "TC0E", "TC0F",
@@ -115,6 +117,11 @@ final class AppModel: ObservableObject {
         refresh()
         helper.refreshStatus()
         loadHardware()
+
+        // helper 的 @Published 变化转发给 model，驱动 UI 立即刷新（状态点/睿频前置等）
+        helper.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &cancellables)
 
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }

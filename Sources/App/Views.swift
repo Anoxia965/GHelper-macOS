@@ -566,6 +566,31 @@ struct SettingsView: View {
                 }
             }
 
+            Card(title: "睿频开关前置（debug=0x144）") {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(ocDotColor)
+                        .frame(width: 7, height: 7)
+                    Text(ocStatusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("检测并配置…") { model.helper.bootArgPromptPending = true }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                        .disabled(model.helper.ocBootArgStatus == .present
+                                  || model.helper.ocBootArgStatus == .configured)
+                }
+                if !model.helper.ocBootArgMessage.isEmpty {
+                    Text(model.helper.ocBootArgMessage)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("debug=0x144 让 zenmaster 能直连 AMD SMU，睿频开关才生效。改动前会自动备份 config.plist 到 ~/Library/Application Support/GHelper/efi-backups/，且需重启才会生效。")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+            }
+
             Card(title: "开机启动") {
                 Toggle("登录时自动启动", isOn: $launchAtLogin)
                     .font(.system(size: 12))
@@ -590,6 +615,30 @@ struct SettingsView: View {
                     Text(err).font(.system(size: 10)).foregroundStyle(.red)
                 }
             }
+        }
+        .onAppear { model.helper.checkOCBootArg() }
+        .alert("配置睿频前置", isPresented: $model.helper.bootArgPromptPending) {
+            Button("现在添加") { model.helper.ensureBootArg() }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            Text("睿频开关需要 OC 的 boot-args 加 debug=0x144。是否现在自动添加？会先备份 config.plist，修改后需重启生效。")
+        }
+    }
+
+    private var ocStatusText: String {
+        switch model.helper.ocBootArgStatus {
+        case .unknown:   return "检测中…"
+        case .noOC:      return "未检测到已挂载的 OC EFI"
+        case .present, .configured: return "已配置 ✓"
+        case .missing:   return "未配置（OC 已挂载）"
+        }
+    }
+
+    private var ocDotColor: Color {
+        switch model.helper.ocBootArgStatus {
+        case .present, .configured: return .green
+        case .missing:              return .orange
+        default:                    return .gray
         }
     }
 
