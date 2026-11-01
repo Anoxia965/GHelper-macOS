@@ -52,4 +52,21 @@ echo "▸ 签名（ad-hoc）…"
 codesign --force --deep --sign - "$APPDIR" 2>/dev/null || \
     echo "  （签名失败，不影响本地运行）"
 
+echo "▸ 构建 .pkg 安装器（--root 方式，固定装到 /Applications，绝不重定位）…"
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
+rm -rf Build/_pkgroot Build/GHelper_component.pkg "Build/GHelper-$VERSION.pkg"
+mkdir -p Build/_pkgroot/Applications
+cp -R "$APPDIR" Build/_pkgroot/Applications/
+# 注：不 sudo chown，保持 anoxia-m:staff 即可正常安装运行，避免构建需输密码
+pkgbuild --root Build/_pkgroot \
+  --identifier cn.anoxia.GHelper \
+  --version "$VERSION" \
+  --install-location / \
+  Build/GHelper_component.pkg
+productbuild --package Build/GHelper_component.pkg \
+  --version "$VERSION" \
+  --identifier cn.anoxia.GHelper.installer \
+  "Build/GHelper-$VERSION.pkg"
+echo "  产物：Build/GHelper-$VERSION.pkg"
+
 echo "✓ 完成：$APPDIR"
