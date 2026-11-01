@@ -806,75 +806,85 @@ struct PopoverDashboard: View {
     var showWindowAction: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             header
             Divider()
-            ScrollView {
-                VStack(spacing: 10) {
-                    // 温度 + 走势
-                    DashCard("温度 · CPU", accent: tempColor(model.cpuTemperature ?? 0)) {
-                        if let t = model.cpuTemperature {
-                            HStack(alignment: .firstTextBaseline) {
-                                BigStat(value: String(format: "%.0f", t), unit: "°C",
-                                        color: tempColor(t))
-                                Spacer()
-                                StatusPill(text: t >= 90 ? "过热" : t >= 80 ? "偏高" : "正常",
-                                           level: tempLevel(t))
-                            }
-                            TrendChart(data: model.tempHistory, color: tempColor(t),
-                                       range: 30...100).frame(height: 34)
-                        } else {
-                            Text("无温度数据").font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                    }
-
-                    // 核心占用
-                    DashCard("核心占用 · \(Machine.physicalCores)C/\(Machine.logicalCores)T",
-                             accent: Brand.accent2) {
-                        CoreGrid(loads: model.coreLoads, physical: Machine.physicalCores,
-                                 cell: 14)
-                    }
-
-                    // 风扇环形
-                    DashCard("风扇") {
-                        if model.fans.isEmpty {
-                            Text("未检测到").font(.system(size: 11)).foregroundStyle(.secondary)
-                        } else {
-                            HStack(spacing: 14) {
-                                ForEach(model.fans, id: \.index) { fan in
-                                    VStack(spacing: 4) {
-                                        RingGauge(value: fan.actualPercent / 100,
-                                                  title: String(format: "%.0f", fan.actualRPM),
-                                                  detail: "RPM",
-                                                  color: fan.isManual ? Brand.amber : Brand.accent2,
-                                                  size: 64, thickness: 7)
-                                        Text(model.roleTitle(for: fan.index))
-                                            .font(.system(size: 9)).foregroundStyle(.secondary)
-                                    }
+            VStack(spacing: 8) {
+                // CPU 综合：温度 + 走势 + 占用 + 频率（放一起）
+                DashCard("CPU", accent: tempColor(model.cpuTemperature ?? 0)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(Machine.cpu)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        HStack(alignment: .top, spacing: 12) {
+                        // 左：温度 + 状态 + 走势
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let t = model.cpuTemperature {
+                                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                    BigStat(value: String(format: "%.0f", t), unit: "°C",
+                                            color: tempColor(t))
+                                    StatusPill(text: t >= 90 ? "过热" : t >= 80 ? "偏高" : "正常",
+                                               level: tempLevel(t))
                                 }
-                                Spacer(minLength: 0)
+                                TrendChart(data: model.tempHistory, color: tempColor(t),
+                                           range: 30...100).frame(height: 26)
+                            } else {
+                                Text("无温度数据").font(.system(size: 10)).foregroundStyle(.secondary)
                             }
                         }
-                    }
+                        .frame(maxWidth: .infinity)
 
-                    // CPU 占用 + 频率
-                    DashCard("处理器") {
-                        HStack(alignment: .firstTextBaseline) {
+                        // 右：占用 + 频率
+                        VStack(alignment: .leading, spacing: 6) {
                             BigStat(value: String(format: "%.0f", model.cpuUsage), unit: "%",
                                     caption: "占用")
-                            Spacer()
                             if let f = model.cpuFrequencyMHz {
                                 Text(String(format: "%.2f GHz", f / 1000))
-                                    .font(.system(size: 16, weight: .semibold)).monospacedDigit()
+                                    .font(.system(size: 18, weight: .semibold)).monospacedDigit()
                             }
+                            MiniBar(value: model.cpuUsage / 100,
+                                    color: model.cpuUsage > 80 ? Brand.danger
+                                            : model.cpuUsage > 50 ? Brand.amber : Brand.accent)
                         }
-                        MiniBar(value: model.cpuUsage / 100,
-                                color: model.cpuUsage > 80 ? Brand.danger
-                                        : model.cpuUsage > 50 ? Brand.amber : Brand.accent)
+                        .frame(maxWidth: .infinity)
+                    }
                     }
                 }
-                .padding(12)
+
+                // 核心占用
+                DashCard("核心占用 · \(Machine.physicalCores)C/\(Machine.logicalCores)T",
+                         accent: Brand.accent2) {
+                    CoreGrid(loads: model.coreLoads, physical: Machine.physicalCores,
+                             cell: 12)
+                }
+
+                // 风扇环形（等宽居中，避免偏左留白）
+                DashCard("风扇") {
+                    if model.fans.isEmpty {
+                        Text("未检测到").font(.system(size: 11)).foregroundStyle(.secondary)
+                    } else {
+                        HStack(spacing: 0) {
+                            ForEach(model.fans, id: \.index) { fan in
+                                VStack(spacing: 4) {
+                                    RingGauge(value: fan.actualPercent / 100,
+                                              title: String(format: "%.0f", fan.actualRPM),
+                                              detail: "RPM",
+                                              color: fan.isManual ? Brand.amber : Brand.accent2,
+                                              size: 66, thickness: 7)
+                                    Text(model.roleTitle(for: fan.index))
+                                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                        }
+                    }
+                }
+
+                // 显卡（与主窗口保持一致：温度 + 占用 + 核心/显存细分 + 显存）
+                gpuMiniCard
             }
+            .padding(12)
 
             if showWindowAction != nil {
                 Button { showWindowAction?() } label: {
@@ -889,6 +899,42 @@ struct PopoverDashboard: View {
             }
         }
         .frame(width: 320)
+    }
+
+    private var gpuMiniCard: some View {
+        DashCard("显卡 · \(model.hardware.gpus.first?.name ?? model.gpu.name)") {
+            if let t = model.gpuTemperature {
+                HStack(alignment: .firstTextBaseline) {
+                    BigStat(value: String(format: "%.0f", t), unit: "°C",
+                            color: t > 85 ? Brand.danger : t > 75 ? Brand.amber : .primary)
+                    Spacer()
+                    if let u = model.gpu.utilization {
+                        Text(String(format: "%.0f%% 占用", u))
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+                if model.gpu.coreUtil != nil || model.gpu.memUtil != nil {
+                    HStack(spacing: 14) {
+                        if let c = model.gpu.coreUtil {
+                            LabeledBar(label: "核心", value: c, color: Brand.accent2)
+                        }
+                        if let m = model.gpu.memUtil {
+                            LabeledBar(label: "显存", value: m, color: Brand.accent)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
+                    Text("GPU 温度不可用")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                }
+            }
+            if model.hardware.gpuVRAM != "—" {
+                StatRow(label: "显存", value: model.hardware.gpuVRAM)
+            }
+        }
     }
 
     private var header: some View {
