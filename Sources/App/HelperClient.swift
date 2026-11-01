@@ -4,6 +4,7 @@
 
 import Foundation
 import ServiceManagement
+import SwiftUI
 
 /// OC boot-args 里 debug=0x144 的配置状态（供睿频开关使用）
 enum OCBootArgStatus: Equatable {
@@ -12,6 +13,36 @@ enum OCBootArgStatus: Equatable {
     case present    // 已配置
     case missing    // OC 已挂载但缺 debug=0x144
     case configured // 本次刚写入（待重启）
+}
+
+// MARK: - EFI / 驱动管理用数据结构
+
+/// 一个 EFI 系统分区（ESP）的扫描结果
+struct EFIPartition: Identifiable, Equatable {
+    let id: String            // disk identifier，如 "disk1s4"
+    let isMounted: Bool
+    let mountPoint: String    // 已挂载时为 /Volumes/xxx，否则空
+    let hasOC: Bool           // 该卷下是否存在 EFI/OC/config.plist
+    let volumeName: String
+}
+
+/// 单个核心驱动在 EFI 内的状态
+struct DriverStatus: Identifiable {
+    let id = UUID()
+    let name: String          // 如 "VirtualSMC.kext"
+    let presentInEFI: Bool    // EFI/OC/Kexts/<name> 文件存在
+    let enabledInConfig: Bool // config Kernel/Add 有且 Enabled
+    let loaded: Bool          // 运行时已加载（kextstat）
+    var ok: Bool { presentInEFI && enabledInConfig }
+    var statusText: String {
+        if loaded { return "已加载" }
+        if presentInEFI && enabledInConfig { return "已安装·待重启" }
+        if presentInEFI { return "文件在·未启用" }
+        return "缺失"
+    }
+    var dotColor: Color {
+        ok ? .green : (presentInEFI ? .orange : .red)
+    }
 }
 
 @MainActor
@@ -364,6 +395,253 @@ final class HelperClient: ObservableObject {
                 self?.lastError = ok ? nil : msg
                 self?.isInstalled = false
                 self?.statusText = "未连接"
+            }
+        }
+    }
+
+    // MARK: - EFI / 驱动管理
+
+    @Published var efiPartitions: [EFIPartition] = []
+    @Published var driverStatuses: [DriverStatus] = []
+    @Published var efiMessage: String = ""
+    @Published var efiWorking = false
+
+    /// 随 App 打包的核心驱动（Install 时作为来源拷贝到 EFI/OC/Kexts）。
+    /// 顺序即期望的 Kernel/Add 加载顺序（依赖：Lilu → VirtualSMC → AMDRyzen → SMCAMDProcessor → AsusFanSMC）。
+    private let coreKexts = [
+        "Lilu.kext",
+        "VirtualSMC.kext",
+        "AMDRyzenCPUPowerManagement.kext",
+        "SMCAMDProcessor.kext",
+        "AsusFanSMC.kext",
+    ]
+
+    /// 扫描所有 EFI 分区（用户态只读）。列出每个分区的挂载状态与是否含 OC，随后自动检测驱动。
+    func scanEFI() {
+        efiWorking = true
+        efiMessage = "正在扫描 EFI 分区…"
+        let script = """
+        diskutil list | awk '/EFI/{print $NF}' | while read disk; do
+          mp=$(diskutil info "$disk" 2>/dev/null | awk -F': ' '/Mount Point/{print $2}')
+          [ "$mp" = "-" ] && mp=""
+          hasoc=0; [ -n "$mp" ] && [ -f "$mp/EFI/OC/config.plist" ] && hasoc=1
+          vol=$([ -n "$mp" ] && basename "$mp" || echo "")
+          echo "$disk|$([ -n "$mp" ] && echo 1 || echo 0)|${mp}|$hasoc|${vol}"
+        done
+        """
+        runUserScript(script) { [weak self] out in
+            Task { @MainActor in
+                guard let self else { return }
+                var parts: [EFIPartition] = []
+                for line in out.components(separatedBy: .newlines) where !line.isEmpty {
+                    let f = line.components(separatedBy: "|")
+                    guard f.count >= 5 else { continue }
+                    parts.append(EFIPartition(
+                        id: f[0],
+                        isMounted: f[1] == "1",
+                        mountPoint: f[2],
+                        hasOC: f[3] == "1",
+                        volumeName: f[4]))
+                }
+                self.efiPartitions = parts
+                self.efiWorking = false
+                if parts.isEmpty {
+                    self.efiMessage = "未发现 EFI 分区（diskutil list 无 EFI 类型）。"
+                } else {
+                    self.efiMessage = "找到 \(parts.count) 个 EFI 分区；含 OC 的已可操作，正在检测驱动…"
+                    self.detectKexts()
+                }
+            }
+        }
+    }
+
+    /// 提权挂载指定 EFI 分区（优先 diskutil mount，失败回退 mount_msdos 到受控目录）。
+    func mountEFI(disk: String) {
+        efiWorking = true
+        efiMessage = "正在挂载 \(disk)…"
+        let script = """
+        disk="\(disk)"
+        if diskutil mount "$disk" 2>/dev/null; then
+          echo OK
+        else
+          MP=/private/tmp/ghelper-efi-mount/$(echo "$disk" | tr '/' '_')
+          mkdir -p "$MP"
+          if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then echo OK; else echo FAIL; fi
+        fi
+        """
+        runAdminScript(script) { [weak self] ok, out in
+            Task { @MainActor in
+                guard let self else { return }
+                self.efiWorking = false
+                if ok && !out.contains("FAIL") {
+                    self.efiMessage = "\(disk) 已挂载，正在重新检测…"
+                    self.scanEFI()
+                } else {
+                    self.efiMessage = "挂载 \(disk) 失败（需要管理员密码，且分区须为 FAT32）。也可在「磁盘工具」手动挂载后重新扫描。"
+                }
+            }
+        }
+    }
+
+    /// 检测已挂载 OC 里 5 个核心 kext 的状态（文件存在 / config 启用 / 运行时加载）。用户态。
+    func detectKexts() {
+        efiWorking = true
+        efiMessage = "正在检测驱动…"
+        let coreList = coreKexts.joined(separator: " ")
+        let script = """
+        python3 - <<'PY'
+        import plistlib, os, subprocess, glob
+        core = '\(coreList)'.split()
+        try:
+            ks = subprocess.check_output(['kextstat'], text=True)
+        except Exception:
+            ks = ''
+        def is_loaded(name):
+            kw = name.replace('.kext', '')
+            return any(kw in l for l in ks.splitlines())
+        for vol in glob.glob('/Volumes/*/EFI/OC/config.plist'):
+            d = os.path.dirname(os.path.dirname(os.path.dirname(vol)))
+            kexts_dir = os.path.join(d, 'EFI/OC/Kexts')
+            try:
+                cfg = plistlib.load(open(vol, 'rb'))
+            except Exception:
+                continue
+            add = cfg.get('Kernel', {}).get('Add', [])
+            enabled = {e.get('BundlePath'): e.get('Enabled', False) for e in add}
+            for name in core:
+                present = os.path.isdir(os.path.join(kexts_dir, name))
+                en = bool(enabled.get(name, False))
+                print('|'.join([name, '1' if present else '0', '1' if en else '0', '1' if is_loaded(name) else '0']))
+        PY
+        """
+        runUserScript(script) { [weak self] out in
+            Task { @MainActor in
+                guard let self else { return }
+                self.efiWorking = false
+                var statuses: [DriverStatus] = []
+                for line in out.components(separatedBy: .newlines) where !line.isEmpty {
+                    let f = line.components(separatedBy: "|")
+                    guard f.count >= 4 else { continue }
+                    statuses.append(DriverStatus(
+                        name: f[0],
+                        presentInEFI: f[1] == "1",
+                        enabledInConfig: f[2] == "1",
+                        loaded: f[3] == "1"))
+                }
+                self.driverStatuses = statuses
+                if statuses.isEmpty {
+                    self.efiMessage = "未找到已挂载且含 OC 的 EFI 卷，无法检测驱动。请先挂载含 OC 的 EFI 分区。"
+                } else {
+                    let missing = statuses.filter { !$0.ok }.count
+                    self.efiMessage = missing == 0
+                        ? "5 个核心驱动齐全且已启用 ✓"
+                        : "有 \(missing) 个核心驱动缺失或未启用，可点「一键补齐」。"
+                }
+            }
+        }
+    }
+
+    /// 一键补齐缺失的核心驱动：拷贝缺失 kext 到 EFI/OC/Kexts，并在 config Kernel/Add 添加/启用条目（处理依赖顺序），
+    /// 每份 config 改动前自动备份。需管理员密码（提权）。
+    func installMissingKexts() {
+        guard let src = Bundle.main.resourceURL?.appendingPathComponent("Kexts").path,
+              FileManager.default.fileExists(atPath: src) else {
+            efiMessage = "App 包内未找到 Kexts 资源，无法自动安装。请重新下载带驱动的安装包。"
+            return
+        }
+        efiWorking = true
+        efiMessage = "正在补齐缺失驱动（需管理员密码）…"
+        let coreList = coreKexts.joined(separator: " ")
+        let script = """
+        SRC='\(src)'
+        BDIR="$HOME/Library/Application Support/GHelper/efi-backups"
+        mkdir -p "$BDIR"
+        TS=$(date +%Y%m%d-%H%M%S)
+        PLISTS=""
+        for vol in /Volumes/*/EFI/OC/config.plist; do [ -f "$vol" ] && PLISTS="$PLISTS
+        $vol"; done
+        MPBASE=/private/tmp/ghelper-efi-$$
+        mkdir -p "$MPBASE"
+        for disk in $(diskutil list | awk '/EFI/{print $NF}'); do
+          MP="$MPBASE/$disk"
+          mkdir -p "$MP"
+          if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then
+            [ -f "$MP/EFI/OC/config.plist" ] && PLISTS="$PLISTS
+        $MP/EFI/OC/config.plist"
+          else
+            diskutil mount "$disk" >/dev/null 2>&1
+            for vol in /Volumes/*/EFI/OC/config.plist; do [ -f "$vol" ] && PLISTS="$PLISTS
+        $vol"; done
+          fi
+        done
+        export PLISTS SRC BDIR TS
+        python3 - <<'PY'
+        import plistlib, os, shutil, glob
+        src = os.environ['SRC']
+        bdir = os.environ['BDIR']
+        ts = os.environ['TS']
+        core = '\(coreList)'.split()
+        plists = [p for p in os.environ['PLISTS'].split('\\n') if p.strip()]
+        seen = set(); paths = []
+        for p in plists:
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            k = (st.st_dev, st.st_ino)
+            if k in seen:
+                continue
+            seen.add(k); paths.append(p)
+        copied = 0; enabled = 0; total = len(paths)
+        for i, p in enumerate(paths, 1):
+            d = os.path.dirname(os.path.dirname(os.path.dirname(p)))
+            kdir = os.path.join(d, 'EFI/OC/Kexts')
+            os.makedirs(kdir, exist_ok=True)
+            cfg = plistlib.load(open(p, 'rb'))
+            add = cfg.setdefault('Kernel', {}).setdefault('Add', [])
+            en = {e.get('BundlePath'): e for e in add}
+            for name in core:
+                src_k = os.path.join(src, name)
+                dst_k = os.path.join(kdir, name)
+                if os.path.isdir(src_k) and not os.path.isdir(dst_k):
+                    shutil.copytree(src_k, dst_k)
+                    copied += 1
+                if name in en:
+                    if not en[name].get('Enabled', False):
+                        en[name]['Enabled'] = True; enabled += 1
+                else:
+                    add.append({'Arch': 'Any', 'BundlePath': name, 'Comment': '',
+                                'Enabled': True, 'ExecutablePath': 'Contents/MacOS/' + os.path.splitext(name)[0],
+                                'PlistPath': 'Contents/Info.plist', 'MinKernel': '', 'MaxKernel': ''})
+                    enabled += 1
+            core_entries = [e for e in add if e.get('BundlePath') in core]
+            others = [e for e in add if e.get('BundlePath') not in core]
+            core_entries.sort(key=lambda e: core.index(e['BundlePath']))
+            cfg['Kernel']['Add'] = core_entries + others
+            shutil.copy(p, os.path.join(bdir, 'config-%s-%d.plist' % (ts, i)))
+            plistlib.dump(cfg, open(p, 'wb'))
+        print('SUMMARY %d %d %d' % (copied, enabled, total))
+        PY
+        """
+        runAdminScript(script) { [weak self] ok, out in
+            Task { @MainActor in
+                guard let self else { return }
+                self.efiWorking = false
+                if ok {
+                    var copied = 0, enabled = 0, total = 0
+                    for line in out.components(separatedBy: .newlines) where line.hasPrefix("SUMMARY") {
+                        let parts = line.split(separator: " ")
+                        if parts.count >= 4 {
+                            copied = Int(parts[1]) ?? 0
+                            enabled = Int(parts[2]) ?? 0
+                            total = Int(parts[3]) ?? 0
+                        }
+                    }
+                    self.efiMessage = "已处理 \(total) 份 OC 配置（拷贝 \(copied) 个驱动、启用/修复 \(enabled) 条）。请重启使驱动生效；备份在 ~/Library/Application Support/GHelper/efi-backups/。"
+                    self.scanEFI()
+                } else {
+                    self.efiMessage = "安装失败：\(out)"
+                }
             }
         }
     }

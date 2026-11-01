@@ -618,6 +618,7 @@ struct SettingsView: View {
     @ObservedObject private var updater = UpdateChecker.shared
     @ObservedObject private var installer = UpdateInstaller.shared
     @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @State private var efiFixPending = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -698,6 +699,78 @@ struct SettingsView: View {
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
 
+            DashCard("驱动与 EFI 管理") {
+                // EFI 分区
+                HStack {
+                    Text("EFI 分区").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(model.helper.efiWorking ? "扫描中…" : "重新扫描") { model.helper.scanEFI() }
+                        .controlSize(.small)
+                        .disabled(model.helper.efiWorking)
+                }
+                if model.helper.efiPartitions.isEmpty {
+                    Text("点「重新扫描」列出 EFI 分区并检测驱动。")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.helper.efiPartitions) { p in
+                        HStack(spacing: 6) {
+                            Circle().fill(p.isMounted ? Color.green : Color.gray)
+                                .frame(width: 7, height: 7)
+                            Text(p.id).font(.system(size: 12))
+                            if !p.volumeName.isEmpty {
+                                Text("(\(p.volumeName))").font(.system(size: 10)).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if p.hasOC {
+                                Text("含 OC").font(.system(size: 9)).foregroundStyle(Brand.accent)
+                            }
+                            if p.isMounted {
+                                Text("已挂载").font(.system(size: 10)).foregroundStyle(.secondary)
+                            } else {
+                                Button("挂载") { model.helper.mountEFI(disk: p.id) }
+                                    .controlSize(.small)
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                // 核心驱动
+                HStack {
+                    Text("核心驱动（EFI 内）").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                if model.helper.driverStatuses.isEmpty {
+                    Text("挂载含 OC 的 EFI 后点「重新扫描」检测。")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.helper.driverStatuses) { s in
+                        HStack(spacing: 6) {
+                            Circle().fill(s.dotColor).frame(width: 7, height: 7)
+                            Text(s.name.replacingOccurrences(of: ".kext", with: ""))
+                                .font(.system(size: 12))
+                            Spacer()
+                            Text(s.statusText).font(.system(size: 10)).foregroundStyle(s.dotColor)
+                        }
+                    }
+                }
+
+                Divider()
+
+                Button("一键补齐缺失驱动") { efiFixPending = true }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(model.helper.efiWorking || model.helper.driverStatuses.isEmpty)
+
+                if !model.helper.efiMessage.isEmpty {
+                    Text(model.helper.efiMessage)
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("自动检测 EFI 挂载情况；未挂载的分区可点「挂载」手动选择。缺失的核心驱动（Lilu/VirtualSMC/AMDRyzen/SMCAMDProcessor/AsusFanSMC）一键补齐，不再需要手动拖拽。")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+            }
+
             DashCard("开机启动") {
                 Toggle("登录时自动启动", isOn: $launchAtLogin)
                     .font(.system(size: 12))
@@ -716,6 +789,24 @@ struct SettingsView: View {
                         accent: model.cpuTempKey == nil ? .orange : Brand.accent)
             }
 
+            DashCard("致谢 / Credits") {
+                Text("这个 App 能存在，首先要感谢 NullMoth（@nullmoth）：他逆向了 NVIDIA 驱动，让我的华硕 FA607（RTX 4060）能在 macOS 下用上独显——也正因为他的工作，我才有了做这个 App 的念头。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Link("NullMoth · NVIDIA macOS 驱动（逆向成果）", destination: URL(string: "https://github.com/nullmoth/nvidia-macos-driver")!)
+                        .font(.system(size: 11))
+                    Link("1401 · 在 Windows 上安装 macOS / 装 NVIDIA 驱动的安装器", destination: URL(string: "https://github.com/nullmoth/1401")!)
+                        .font(.system(size: 11))
+                    Link("1401 Mac 版安装器下载（Releases）", destination: URL(string: "https://github.com/nullmoth/nvidia-macos-driver/releases")!)
+                        .font(.system(size: 11))
+                }
+                Divider()
+                Text("同时感谢所有驱动作者与社区：Acidanthera（VirtualSMC / Lilu）、Shaneee / wtf.spinach（SMCAMDProcessor / AMDRyzenCPUPowerManagement）、AsusFanSMC 社区、NullMoth 团队，以及整个 OpenCore / Hackintosh 社区。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if let err = model.helper.lastError {
                 DashCard("提示") {
                     Text(err).font(.system(size: 10)).foregroundStyle(.red)
@@ -728,6 +819,12 @@ struct SettingsView: View {
             Button("稍后", role: .cancel) {}
         } message: {
             Text("睿频开关需要 OC 的 boot-args 加 debug=0x144。是否现在自动添加？会扫描内置盘与 U 盘上所有 OpenCore 配置，每份先备份 config.plist 再写入，修改后需重启生效。")
+        }
+        .alert("补齐缺失驱动", isPresented: $efiFixPending) {
+            Button("现在补齐") { model.helper.installMissingKexts() }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            Text("会把缺失的核心驱动拷贝到 EFI/OC/Kexts 并在 config 里启用（处理好依赖顺序）。改动前自动备份 config.plist，修改后需重启生效。")
         }
     }
 

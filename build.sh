@@ -44,6 +44,8 @@ cp "$BUILD/GHelperHelper" "$CONTENTS/MacOS/GHelperHelper"
 cp Info.plist "$CONTENTS/Info.plist"
 cp Build/GHelper.icns "$CONTENTS/Resources/"
 cp Build/Menubar.pdf  "$CONTENTS/Resources/"
+# 把随附驱动打进 App，供「一键补齐缺失驱动」从自身资源拷贝到 EFI
+COPYFILE_DISABLE=1 cp -R Kexts "$CONTENTS/Resources/Kexts" 2>/dev/null || echo "  （警告：未找到仓库 Kexts/ 目录）"
 chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/MacOS/GHelperHelper"
 
 echo "▸ 签名（ad-hoc）…"

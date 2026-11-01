@@ -196,3 +196,19 @@ cd GHelper-macOS
 ## 免责声明
 
 本软件按「原样」提供，作者不承担因使用本软件导致的任何硬件损坏、数据丢失或系统不稳定后果。操作风扇/温度传感器及黑苹果引导属于进阶折腾，请自担风险，并始终保留 EFI 备份。
+
+---
+
+## 致谢 / Credits
+
+这个 App 能存在，首先要感谢 **NullMoth（[@nullmoth](https://github.com/nullmoth)）**：是他逆向了 NVIDIA 驱动（[nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)），让我的华硕 FA607（RTX 4060）能在 macOS 下用上独显——也正因为他的工作，我才有了做这个 App 的念头。没有他，这个项目根本不会开始。他做的 **[1401](https://github.com/nullmoth/1401)** 安装器（Mac / Windows 版）也是装这套 NVIDIA 驱动最省事的方式，推荐需要装驱动的兄弟去用。
+
+同时也要感谢所有让黑苹果能跑起来的驱动作者与社区：
+
+- **Acidanthera** — VirtualSMC / Lilu（SMC 后端与补丁框架的基础）
+- **Shaneee / wtf.spinach** — SMCAMDProcessor / AMDRyzenCPUPowerManagement（AMD CPU 温度与电源管理）
+- **AsusFanSMC 社区维护者** — 华硕主板风扇控制键
+- **NullMoth 团队** — NVIDIA macOS 驱动（NVAccel / NVRM 等）
+- 以及整个 **OpenCore / Hackintosh** 社区
+
+本仓库仅随附打包这些第三方开源驱动，版权与许可归各自作者所有。
