@@ -10,7 +10,7 @@ BUILD="Build"
 APPDIR="$BUILD/$APP_NAME.app"
 CONTENTS="$APPDIR/Contents"
 
-SRC_SHARED="Sources/Shared/SMC.swift Sources/Shared/HelperProtocol.swift Sources/Shared/Sensors.swift Sources/Shared/Shell.swift Sources/Shared/CoreMonitor.swift"
+SRC_SHARED="Sources/Shared/SMC.swift Sources/Shared/HelperProtocol.swift Sources/Shared/Sensors.swift Sources/Shared/Shell.swift Sources/Shared/CoreMonitor.swift Sources/Shared/AuraController.swift"
 
 echo "▸ 编译特权助手…"
 swiftc -O $SRC_SHARED Sources/Helper/main.swift \
@@ -27,6 +27,11 @@ swiftc -O $SRC_SHARED Sources/App/FanCurve.swift \
        Sources/App/AppDelegate.swift \
        Sources/App/AppMain.swift \
        -o "$BUILD/GHelperBin"
+
+echo "▸ 编译 rgbctl（灯光用户态工具，随 App 分发，安装时拷到 /usr/local/bin）…"
+clang -framework IOKit -framework CoreFoundation \
+      RGB/kext/rgbctl.c -o "$BUILD/rgbctl" || \
+    echo "  （rgbctl 编译失败）"
 
 # 确保图标资源存在（clean checkout 自动生成，无需手动）
 if [ ! -f Build/GHelper.icns ]; then
@@ -46,7 +51,10 @@ cp Build/GHelper.icns "$CONTENTS/Resources/"
 cp Build/Menubar.pdf  "$CONTENTS/Resources/"
 # 把随附驱动打进 App，供「一键补齐缺失驱动」从自身资源拷贝到 EFI
 COPYFILE_DISABLE=1 cp -R Kexts "$CONTENTS/Resources/Kexts" 2>/dev/null || echo "  （警告：未找到仓库 Kexts/ 目录）"
-chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/MacOS/GHelperHelper"
+# 灯光：rgbctl 用户态工具（放 MacOS，安装时拷到 /usr/local/bin）+ GHRGB.kext（放 Resources，安装时拷到 /Library/Extensions）
+cp "$BUILD/rgbctl" "$CONTENTS/MacOS/rgbctl" 2>/dev/null || echo "  （警告：未编译 rgbctl）"
+chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/MacOS/GHelperHelper" "$CONTENTS/MacOS/rgbctl"
+COPYFILE_DISABLE=1 cp -R RGB/kext/GHRGB.kext "$CONTENTS/Resources/GHRGB.kext" 2>/dev/null || echo "  （警告：未找到 GHRGB.kext）"
 
 echo "▸ 签名（ad-hoc）…"
 codesign --force --deep --sign - "$APPDIR" 2>/dev/null || \

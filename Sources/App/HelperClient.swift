@@ -135,6 +135,21 @@ final class HelperClient: ObservableObject {
         proxy()?.setBoostMode(enabled: enabled, reply: completion)
     }
 
+    // MARK: 键盘 RGB
+
+    /// 设置键盘 RGB 灯光（经 root 助手 → rgbctl → GHRGB kext）。
+    func applyKeyboardLighting(r: Int, g: Int, b: Int, mode: Int,
+                              brightness: Int, speed: Int,
+                              completion: @escaping (Bool, String) -> Void) {
+        guard let proxy = proxy() else {
+            completion(false, "特权助手未连接，请到设置页重装")
+            return
+        }
+        proxy.applyKeyboardLighting(r: r, g: g, b: b, mode: mode,
+                                   brightness: brightness, speed: speed,
+                                   reply: completion)
+    }
+
     // MARK: 安装
 
     /// 用 osascript 弹系统密码框，一次性把助手装进去
@@ -166,6 +181,21 @@ final class HelperClient: ObservableObject {
         cp '\(helper)' '\(kHelperInstallPath)'
         chown root:wheel '\(kHelperInstallPath)'
         chmod 755 '\(kHelperInstallPath)'
+        # 灯光：rgbctl（用户态工具）→ /usr/local/bin；GHRGB.kext → /Library/Extensions 并加载
+        RGBCTL_SRC="$(dirname '\(helper)')/rgbctl"
+        KEXT_SRC="$(dirname '\(helper)')/../Resources/GHRGB.kext"
+        if [ -x "$RGBCTL_SRC" ]; then
+          cp "$RGBCTL_SRC" /usr/local/bin/rgbctl
+          chmod 755 /usr/local/bin/rgbctl
+          echo "rgbctl installed"
+        fi
+        if [ -d "$KEXT_SRC" ]; then
+          rm -rf /Library/Extensions/GHRGB.kext
+          cp -R "$KEXT_SRC" /Library/Extensions/GHRGB.kext
+          chown -R root:wheel /Library/Extensions/GHRGB.kext
+          kmutil load -p /Library/Extensions/GHRGB.kext -z 2>/dev/null || true
+          echo "GHRGB kext installed (reboot may be required)"
+        fi
         cat > '\(kHelperPlistPath)' <<'PLISTEOF'
         \(plist)
         PLISTEOF

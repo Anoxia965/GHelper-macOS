@@ -18,6 +18,7 @@
 - **硬件信息页**：自动探测 macOS 版本、SMBIOS、CPU、内存、PCI 显卡、OpenCore、SIP、SMC 后端、kext 加载状态等（读不到显示「—」，不写死本机信息）。
 - **CPU 温度校准**：AMD 的 Tctl 往往偏高，设置里用偏移滑块现场校准（默认 0）。
 - **频率显示**：CPU 实时频率（经 root 助手跑 `powermetrics` 读取，能看到真实 boost 频率）。显卡显示型号、显存、**GPU 温度与占用**（NVIDIA 机型经 [NullMoth](https://github.com/nullmoth/nvidia-macos-driver) 驱动可读取，含核心/显存占用细分）；GPU **核心频率**在 macOS 下物理读不到，诚实标注「不适用」，不影响温度/占用监控。
+- **键盘 RGB 灯光**：华硕键盘 RGB（经 `GHRGB` 内核驱动 → ACPI WMNB 通道）→ 在「灯光」标签页选颜色 + 亮度（0–3）即时下发。颜色与亮度已真机验证；呼吸/彩虹等特效按协议下发，本机未逐一验证。需要 root 助手与 `GHRGB.kext`（随 App 安装自动装入 `/Library/Extensions`）。
 
 ---
 

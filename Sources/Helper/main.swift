@@ -315,6 +315,59 @@ final class HelperService: NSObject, HelperProtocol {
         }
     }
 
+    // MARK: - 键盘 RGB（GHRGB kext → rgbctl，需 root）
+
+    /// rgbctl 安装位置（由 App「安装/重装」时从包内拷到此处，或由本机手动安装）
+    private let rgbctlPath = "/usr/local/bin/rgbctl"
+
+    /// 跑一次 rgbctl，返回 (成功?, 标准输出/错误)
+    private func runRGBCTL(_ args: [String]) -> (Bool, String) {
+        guard FileManager.default.isExecutableFile(atPath: rgbctlPath) else {
+            return (false, "rgbctl 未安装（\(rgbctlPath) 不存在）。请在 GHelper 设置页点「安装/重装」")
+        }
+        let task = Process()
+        task.launchPath = rgbctlPath
+        task.arguments = args
+        let out = Pipe(), err = Pipe()
+        task.standardOutput = out
+        task.standardError = err
+        do { try task.run() } catch {
+            return (false, "rgbctl 启动失败: \(error.localizedDescription)")
+        }
+        task.waitUntilExit()
+        let o = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let text = (o + e).trimmingCharacters(in: .whitespacesAndNewlines)
+        let ok = task.terminationStatus == 0
+        return (ok, ok ? text : text)
+    }
+
+    func applyKeyboardLighting(r: Int, g: Int, b: Int, mode: Int,
+                              brightness: Int, speed: Int,
+                              reply: @escaping (Bool, String) -> Void) {
+        touch()
+        let rr = min(max(r, 0), 255)
+        let gg = min(max(g, 0), 255)
+        let bb = min(max(b, 0), 255)
+        let mm = min(max(mode, 0), 255)
+        let sp = min(max(speed, 0), 255)
+        let lvl = min(max(brightness, 0), 15)
+
+        let (okSet, msgSet) = runRGBCTL(["set", "\(mm)", "\(rr)", "\(gg)", "\(bb)", "\(sp)"])
+        guard okSet else {
+            reply(false, msgSet)
+            return
+        }
+        let (okBright, msgBright) = runRGBCTL(["bright", "\(lvl)"])
+        let ok = okSet && okBright
+        let detail = "颜色(\(rr),\(gg),\(bb)) 亮度\(lvl)（\(ok ? "成功" : "失败")）"
+        if ok {
+            reply(true, detail)
+        } else {
+            reply(false, "\(detail) · \(msgBright)")
+        }
+    }
+
     func uninstall(reply: @escaping (Bool, String) -> Void) {
         boostReapplyTimer?.invalidate()
         boostReapplyTimer = nil

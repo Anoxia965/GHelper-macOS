@@ -42,6 +42,13 @@ let kHelperPlistPath = "/Library/LaunchDaemons/cn.anoxia.GHelper.helper.plist"
 
     /// 卸载自己（删除 LaunchDaemon 与二进制）
     func uninstall(reply: @escaping (Bool, String) -> Void)
+
+    /// 设置键盘 RGB 灯光（经 GHRGB kext → ACPI WMNB）。
+    /// 参数均为 0…255（r/g/b）、mode（0=静态…）、brightness（0…15，本机实测 0–3）、speed（0/1/2）。
+    /// 返回 (是否成功, 描述)。rgbctl 未安装或 GHRGB 驱动未加载时返回失败并附带指引。
+    func applyKeyboardLighting(r: Int, g: Int, b: Int, mode: Int,
+                              brightness: Int, speed: Int,
+                              reply: @escaping (Bool, String) -> Void)
 }
 
 // MARK: - 错误

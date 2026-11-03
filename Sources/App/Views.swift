@@ -17,6 +17,7 @@ struct RootView: View {
         case monitor = "监控"
         case fan = "风扇"
         case battery = "电池"
+        case lighting = "灯光"
         case hardware = "硬件"
         case settings = "设置"
     }
@@ -32,6 +33,7 @@ struct RootView: View {
                     case .monitor:  MonitorView()
                     case .fan:      FanView()
                     case .battery:  BatteryView()
+                    case .lighting: LightingView()
                     case .hardware: HardwareView()
                     case .settings: SettingsView()
                     }
@@ -606,6 +608,87 @@ struct BatteryView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+            }
+        }
+    }
+}
+
+// MARK: - 键盘灯光（Aura）
+
+struct LightingView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 12) {
+            DashCard("状态") {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(model.auraAvailable ? Brand.accent : Brand.amber)
+                        .frame(width: 7, height: 7)
+                    Text(model.auraStatus)
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("重新检测") { model.refreshAura() }
+                        .buttonStyle(.bordered).controlSize(.small)
+                }
+                Text("华硕键盘 RGB（GHRGB 驱动 · ACPI WMNB 通道）。经 root 助手下发，需先装好特权助手。颜色 + 亮度已真机验证；呼吸/彩虹等特效按协议下发，本机未逐一验证。")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            DashCard("模式") {
+                Picker("模式", selection: $model.auraMode) {
+                    ForEach(AuraMode.allCases) { m in
+                        Text(m.rawValue).tag(m)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            DashCard("颜色") {
+                ColorPicker("主色", selection: $model.auraColor)
+                if model.auraMode == .breathing {
+                    ColorPicker("次色", selection: $model.auraColor2)
+                }
+                Text("本机驱动仅支持全局单色：静态/彩虹用主色，呼吸用主色+次色。分区控制暂未实现。")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            DashCard("亮度与速度") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("亮度").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(model.auraBrightness)")
+                            .font(.system(size: 11)).monospacedDigit()
+                    }
+                    Slider(value: Binding(
+                        get: { Double(model.auraBrightness) },
+                        set: { model.auraBrightness = Int($0) }),
+                           in: 0...3, step: 1)
+                    HStack {
+                        Text("速度").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(model.auraSpeed)")
+                            .font(.system(size: 11)).monospacedDigit()
+                    }
+                    Slider(value: Binding(
+                        get: { Double(model.auraSpeed) },
+                        set: { model.auraSpeed = Int($0) }),
+                           in: 1...3, step: 1)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button { model.applyLighting() } label: { Text("应用") }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(!model.auraAvailable)
+                Button { model.turnOffLighting() } label: { Text("关闭") }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(!model.auraAvailable)
+                Spacer()
             }
         }
     }

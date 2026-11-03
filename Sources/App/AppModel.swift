@@ -5,9 +5,10 @@
 import Foundation
 import SwiftUI
 import Combine
+import AppKit
 
 @MainActor
-final class AppModel: ObservableObject {
+final class AppModel: ObservableObject, RGBBackend {
 
     /// 全局单例：菜单栏代理与主程序共用同一个实例
     @MainActor static let shared = AppModel()
@@ -61,6 +62,51 @@ final class AppModel: ObservableObject {
 
     /// 睿频开关的即时反馈（成功/失败都显示，解决「点了没反应」看不到结果的问题）
     @Published var boostStatus: String = ""
+
+    // MARK: 键盘灯光（Aura USB）
+
+    let aura = AuraController()
+    @Published var auraAvailable: Bool = false
+    @Published var auraStatus: String = "未检测"
+
+    @Published var auraMode: AuraMode = .staticColor {
+        didSet { saveLighting(); applyLighting() }
+    }
+    @Published var auraColor = Color(rgb: 0x1D9E75) {
+        didSet { saveLighting(); applyLighting() }
+    }
+    @Published var auraColor2 = Color(rgb: 0x5DCAA5) {
+        didSet { saveLighting(); applyLighting() }
+    }
+    /// 四区颜色（FA607 为四区 RGB 键盘）
+    @Published var auraZones: [Color] = [
+        Color(rgb: 0x1D9E75), Color(rgb: 0x5DCAA5),
+        Color(rgb: 0xE0A23A), Color(rgb: 0xD9544B)
+    ] {
+        didSet { saveLighting(); applyLighting() }
+    }
+    @Published var auraBrightness: Int = 2 {
+        didSet { saveLighting(); applyLighting() }
+    }
+    @Published var auraSpeed: Int = 2 {
+        didSet { saveLighting(); applyLighting() }
+    }
+    @Published var auraPerZone: Bool = false {
+        didSet { saveLighting(); applyLighting() }
+    }
+
+    /// Color → RRGGBB 整数（持久化用）
+    private func hex(of color: Color) -> UInt32 {
+        let ns = NSColor(color).usingColorSpace(.deviceRGB) ?? NSColor.black
+        let r = UInt32(min(1, max(0, ns.redComponent)) * 255)
+        let g = UInt32(min(1, max(0, ns.greenComponent)) * 255)
+        let b = UInt32(min(1, max(0, ns.blueComponent)) * 255)
+        return (r << 16) | (g << 8) | b
+    }
+    private func rgbTuple(_ color: Color) -> RGB {
+        let h = hex(of: color)
+        return RGB(r: UInt8((h >> 16) & 0xFF), g: UInt8((h >> 8) & 0xFF), b: UInt8(h & 0xFF))
+    }
 
     // MARK: 每把扇独立控制（绑定辅助）
 
@@ -124,6 +170,8 @@ final class AppModel: ObservableObject {
         refresh()
         helper.refreshStatus()
         loadHardware()
+        aura.backend = self
+        refreshAura()
 
         // helper 的 @Published 变化转发给 model，驱动 UI 立即刷新（状态点/睿频前置等）
         helper.objectWillChange
@@ -172,6 +220,67 @@ final class AppModel: ObservableObject {
                 guard let self = self else { return }
                 self.lastApplyMessage = "睿频：\(msg)"
                 self.boostStatus = ok ? "✓ \(msg)" : "✗ \(msg)"
+            }
+        }
+    }
+
+    // MARK: 键盘灯光
+
+    /// 重新检测 Aura 控制器（实际 = root 助手是否就位，kext 由 rgbctl 在应用时校验）
+    func refreshAura() {
+        aura.backend = self
+        let ok = helper.isInstalled
+        auraAvailable = ok
+        aura.statusMessage = ok ? "GHRGB 驱动已就绪，可控制" : "需先安装特权助手"
+    }
+
+    /// 把当前偏好下发到键盘（控制器不可用则跳过）
+    func applyLighting() {
+        guard aura.available else {
+            auraStatus = aura.statusMessage
+            return
+        }
+        aura.apply(mode: auraMode, color: rgbTuple(auraColor), color2: rgbTuple(auraColor2),
+                   brightness: auraBrightness, speed: auraSpeed, perZone: auraPerZone,
+                   zones: auraZones.map { rgbTuple($0) })
+        auraAvailable = aura.available
+        auraStatus = aura.lastApplied
+    }
+
+    /// 关闭键盘灯
+    func turnOffLighting() {
+        aura.turnOff()
+        auraAvailable = aura.available
+        auraStatus = aura.lastApplied
+    }
+
+    // MARK: RGBBackend（灯光经 root 助手下发）
+
+    func rgbSet(r: UInt8, g: UInt8, b: UInt8, mode: UInt8, brightness: Int, speed: Int) {
+        guard helper.isInstalled else {
+            auraStatus = "需先安装特权助手"
+            return
+        }
+        helper.applyKeyboardLighting(r: Int(r), g: Int(g), b: Int(b),
+                                    mode: Int(mode), brightness: brightness, speed: speed) {
+            [weak self] ok, msg in
+            Task { @MainActor in
+                guard let self else { return }
+                self.auraStatus = ok ? "✓ \(msg)" : "✗ \(msg)"
+            }
+        }
+    }
+
+    func rgbTurnOff() {
+        guard helper.isInstalled else {
+            auraStatus = "需先安装特权助手"
+            return
+        }
+        helper.applyKeyboardLighting(r: 0, g: 0, b: 0, mode: 0, brightness: 0, speed: 0) {
+            [weak self] ok, msg in
+            Task { @MainActor in
+                guard let self else { return }
+                self.auraStatus = ok ? "✓ \(msg)" : "✗ \(msg)"
             }
         }
     }
@@ -339,6 +448,13 @@ final class AppModel: ObservableObject {
         static let controls = "fanControls"
         static let offset = "cpuTempOffset"
         static let boost = "boostEnabled"
+        static let auraMode = "auraMode"
+        static let auraColor = "auraColor"
+        static let auraColor2 = "auraColor2"
+        static let auraZones = "auraZones"
+        static let auraBrightness = "auraBrightness"
+        static let auraSpeed = "auraSpeed"
+        static let auraPerZone = "auraPerZone"
     }
 
     private func save() {
@@ -350,6 +466,19 @@ final class AppModel: ObservableObject {
         if let data = try? JSONEncoder().encode(dict) {
             d.set(data, forKey: Key.controls)
         }
+        saveLighting()
+    }
+
+    private func saveLighting() {
+        let d = UserDefaults.standard
+        d.set(auraMode.rawValue, forKey: Key.auraMode)
+        d.set(Int(hex(of: auraColor)), forKey: Key.auraColor)
+        d.set(Int(hex(of: auraColor2)), forKey: Key.auraColor2)
+        let z = auraZones.prefix(4).map { Int(hex(of: $0)) }
+        d.set(z, forKey: Key.auraZones)
+        d.set(auraBrightness, forKey: Key.auraBrightness)
+        d.set(auraSpeed, forKey: Key.auraSpeed)
+        d.set(auraPerZone, forKey: Key.auraPerZone)
     }
 
     private func load() {
@@ -382,6 +511,25 @@ final class AppModel: ObservableObject {
 
         // 睿频模式：默认开启（跑满），仅当用户显式设过才覆盖
         if d.object(forKey: Key.boost) != nil { boostEnabled = d.bool(forKey: Key.boost) }
+
+        // 键盘灯光：仅当用户确实设过才覆盖默认值
+        if let m = d.string(forKey: Key.auraMode), let am = AuraMode(rawValue: m) { auraMode = am }
+        if d.object(forKey: Key.auraColor) != nil {
+            auraColor = Color(rgb: UInt32(d.integer(forKey: Key.auraColor)))
+        }
+        if d.object(forKey: Key.auraColor2) != nil {
+            auraColor2 = Color(rgb: UInt32(d.integer(forKey: Key.auraColor2)))
+        }
+        if let z = d.array(forKey: Key.auraZones) as? [Int], z.count == 4 {
+            auraZones = z.map { Color(rgb: UInt32($0)) }
+        }
+        if d.object(forKey: Key.auraBrightness) != nil {
+            auraBrightness = min(max(d.integer(forKey: Key.auraBrightness), 0), 3)
+        }
+        if d.object(forKey: Key.auraSpeed) != nil {
+            auraSpeed = min(max(d.integer(forKey: Key.auraSpeed), 1), 3)
+        }
+        if d.object(forKey: Key.auraPerZone) != nil { auraPerZone = d.bool(forKey: Key.auraPerZone) }
     }
 
     func resetCurve(_ role: FanRole) {
