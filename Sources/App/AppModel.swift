@@ -178,6 +178,13 @@ final class AppModel: ObservableObject, RGBBackend {
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
+        // helper.isInstalled 是异步 ping 回来的；它变 true 后刷新灯光可用性，
+        // 否则 auraAvailable 一直是 false → 灯光按钮灰掉、点不动（“控制没反应”）。
+        helper.$isInstalled
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshAura() }
+            .store(in: &cancellables)
+
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -229,9 +236,9 @@ final class AppModel: ObservableObject, RGBBackend {
     /// 重新检测 Aura 控制器（实际 = root 助手是否就位，kext 由 rgbctl 在应用时校验）
     func refreshAura() {
         aura.backend = self
-        let ok = helper.isInstalled
-        auraAvailable = ok
-        aura.statusMessage = ok ? "GHRGB 驱动已就绪，可控制" : "需先安装特权助手"
+        aura.refresh()                 // 设 aura.available = (backend != nil) → true，否则 applyLighting 的 guard 直接 return
+        auraAvailable = helper.isInstalled
+        auraStatus = aura.statusMessage
     }
 
     /// 把当前偏好下发到键盘（控制器不可用则跳过）
