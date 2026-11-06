@@ -83,4 +83,10 @@ productbuild --package Build/GHelper_component.pkg \
   "Build/GHelper-$VERSION.pkg"
 echo "  产物：Build/GHelper-$VERSION.pkg"
 
+echo "▸ 打包 app.zip（供 App 内「检查更新 → 下载并更新」一键更新，仅替换 GHelper.app；更新器只认 .dmg/app.zip，故必须一并产出）…"
+rm -f "Build/GHelper-$VERSION.app.zip"
+# --keepParent 把 GHelper.app 目录名一并打进压缩包（顶层即 GHelper.app/），更新器解包才能定位；ditto 同时保留扩展属性与代码签名
+ditto -c -k --keepParent "$APPDIR" "Build/GHelper-$VERSION.app.zip"
+echo "  产物：Build/GHelper-$VERSION.app.zip"
+
 echo "✓ 完成：$APPDIR"
