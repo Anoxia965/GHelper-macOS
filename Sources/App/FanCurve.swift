@@ -33,7 +33,7 @@ struct FanCurve: Codable, Equatable {
             ).map { CurvePoint(temperature: $0, percent: $1) }, floorPercent: 35)
         case .gpu:
             // GPU 曲线同样提前提速。注意：GPU 风扇（fan1）经 WMNB 接管后已可正常控速
-            // （此前 SMC 手动会停转），空闲 ≈2100、100% 占空比 ≈6500+（F1Mx=7400 额定）。
+            // （此前 SMC 手动会停转），空闲 ≈2100、100% 占空比 ≈6500+（F1Mx=7600 额定，受 WMNB 通道限制实际约 7300 封顶）。
             // 末点给到 100% 占空比，按 SMC 额定上限跑满。
             return FanCurve(points: zip(
                 [40, 50, 58, 65, 72, 78, 84, 90],

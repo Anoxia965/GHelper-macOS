@@ -55,6 +55,11 @@ final class AppModel: ObservableObject, RGBBackend {
     }
     @Published var lastApplyMessage: String = ""
 
+    /// 强冷倒计时（秒）：某把扇已进入「稳态保持」阶段时，键为该角色、值为剩余秒数；未进入稳态（仍在拉满爬升）时该键不存在。
+    @Published var turboRemaining: [FanRole: Int] = [:]
+    /// 强冷爬升中标记：某把扇已触发强冷、但转速尚未到达稳态（仍在拉满爬升）时为 true。
+    @Published var turboRamping: [FanRole: Bool] = [:]
+
     // 睿频模式：true=跑满（放开上限），false=锁默认频率（降温）。持久化，默认开启。
     @Published var boostEnabled: Bool = true {
         didSet { UserDefaults.standard.set(boostEnabled, forKey: Key.boost) }
@@ -157,6 +162,7 @@ final class AppModel: ObservableObject, RGBBackend {
     private var pollTimer: Timer?
     private var fanTimer: Timer?
     private var freqTimer: Timer?
+    private var turboTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
 
     /// SMCAMDProcessor 装好后可能出现的 CPU 温度键
@@ -193,6 +199,74 @@ final class AppModel: ObservableObject, RGBBackend {
         }
         freqTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshFrequency() }
+        }
+        // 强冷：每秒检测转速是否到达稳态；稳态后保持 30 秒再回落
+        turboTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self = self else { return }
+                let now = Date()
+                var anyExpired = false
+                var remaining: [FanRole: Int] = [:]
+                var ramping: [FanRole: Bool] = [:]
+
+                // ── 双扇强冷协调：两把扇互相等到都稳态，再统一一起开始 30 秒倒计时 ──
+                if self.turboAllActive {
+                    for r in FanRole.allCases { self.tickTurboRamp(r, now: now) }
+                    let cpuSteady = self.turboSteadyAt[.cpu] != nil
+                    let gpuSteady = self.turboSteadyAt[.gpu] != nil
+                    // 互等等待保护：两扇都已拉满爬升超 70s（某扇物理上爬不到真正满速），
+                    // 强制认定都到顶，一起进入保持阶段，避免一扇先到、另一扇慢而干等过久。
+                    let cpuOver = (now.timeIntervalSince(self.turboStartAt[.cpu] ?? now) > 70)
+                    let gpuOver  = (now.timeIntervalSince(self.turboStartAt[.gpu] ?? now) > 70)
+                    if cpuSteady && gpuSteady {
+                        if self.turboAllSteadyAt == nil { self.turboAllSteadyAt = now }
+                    } else if cpuOver && gpuOver {
+                        if self.turboSteadyAt[.cpu] == nil { self.turboSteadyAt[.cpu] = now }
+                        if self.turboSteadyAt[.gpu] == nil { self.turboSteadyAt[.gpu] = now }
+                        if self.turboAllSteadyAt == nil { self.turboAllSteadyAt = now }
+                    }
+                    if let allSteadyAt = self.turboAllSteadyAt {
+                        let dropAt = allSteadyAt.addingTimeInterval(30)
+                        if now >= dropAt {
+                            for r in FanRole.allCases { self.clearTurbo(r) }
+                            self.turboAllActive = false
+                            self.turboAllSteadyAt = nil
+                            anyExpired = true
+                        } else {
+                            let rem = Int(ceil(dropAt.timeIntervalSinceNow))
+                            for r in FanRole.allCases { remaining[r] = rem; ramping[r] = false }
+                        }
+                    } else {
+                        // 还没都稳态：两扇都显示「互等等待中」
+                        for r in FanRole.allCases { ramping[r] = true }
+                    }
+                    self.turboRemaining = remaining
+                    self.turboRamping = ramping
+                    if anyExpired { self.applyNow() }
+                    return
+                }
+
+                // ── 单扇强冷：各自判定稳态、各自 30 秒倒计时 ──
+                for role in FanRole.allCases {
+                    guard self.isTurboActive(role) else { continue }
+                    self.tickTurboRamp(role, now: now)
+
+                    if let steadyAt = self.turboSteadyAt[role] {
+                        let dropAt = steadyAt.addingTimeInterval(30)
+                        if now >= dropAt {
+                            self.clearTurbo(role)
+                            anyExpired = true
+                        } else {
+                            remaining[role] = Int(ceil(dropAt.timeIntervalSinceNow))
+                        }
+                    } else {
+                        ramping[role] = true
+                    }
+                }
+                self.turboRemaining = remaining
+                self.turboRamping = ramping
+                if anyExpired { self.applyNow() }
+            }
         }
 
         // 启动后按已存偏好重涂睿频模式（助手装好才生效）
@@ -386,6 +460,23 @@ final class AppModel: ObservableObject, RGBBackend {
     /// 不再反复尝试 WMNB（也避免刷失败日志）。App 重启（如重启后）会重新探测。
     private var wmnbAvailable: Bool = true
 
+    /// 强冷状态（按角色）：
+    /// - turboRampingState 为 true 表示已触发、转速正在拉满爬升（尚未稳态）；
+    /// - turboSteadyAt 非空表示已到达稳态，从此时刻起再保持 30 秒后回落；
+    /// - turboSteadyCount / turboLastRPM 用于稳态判定（转速连续若干采样基本不变即视为稳态）；
+    /// - turboStartAt 用于安全上限（爬升超 120s 仍未判定稳态则强制进入保持阶段）。
+    private var turboRampingState: [FanRole: Bool] = [:]
+    private var turboSteadyAt: [FanRole: Date] = [:]
+    private var turboSteadyCount: [FanRole: Int] = [:]
+    private var turboLastRPM: [FanRole: Double] = [:]
+    private var turboStartAt: [FanRole: Date] = [:]
+    /// 双扇强冷协调：两把扇互相等到都稳态后，再统一一起开始 30 秒倒计时
+    @Published var turboAllActive: Bool = false
+    private var turboAllSteadyAt: Date? = nil
+    /// 该扇强冷是否走 SMC 目标转速通道。⚠️ 已弃用：现两扇强冷都走 WMNB 100% 平曲线（SMC 目标通道 F0 实测只到 7300 且会连带停转另一扇），此字段恒为 false。
+    /// 退出强冷时需据此把 SMC 手动标志清回固件自动。
+    private var turboSMC: [FanRole: Bool] = [:]
+
     // WMNB 风扇曲线 devid：0x00110024=CPU 风扇 / 0x00110025=GPU 风扇（asus-wmi 同款）
     private static let wmnbDevidCPU: UInt32 = 0x00110024
     private static let wmnbDevidGPU: UInt32 = 0x00110025
@@ -403,6 +494,39 @@ final class AppModel: ObservableObject, RGBBackend {
             let ctrl = controls[role] ?? FanControl()
             let devid: UInt32 = (role == .cpu) ? Self.wmnbDevidCPU : Self.wmnbDevidGPU
             let temp = temperature(for: ctrl.tempSource)
+
+            // ── 强冷模式：两把扇都走 WMNB 100% 平曲线冲满速（额定上限 F0Mx=7800 / F1Mx=7600），
+            //    到达满速后保持 30 秒，期间绕过限速；时间到自动回落 ──
+            // ⚠️ 绝不能用 SMC 手动（setFanManual + 目标转速）：本机实测 F0 走 SMC 目标 7800 只会稳到 7300，
+            //    且任一扇设为 SMC 手动都会连带把另一把扇搞停（F1 掉到 0）。WMNB 曲线通道两扇都能安全冲到额定附近。
+            if isTurboActive(role) {
+                let flat = flatCurve(100, base: ctrl.curve)
+                let packed = packCurve(flat)
+                if lastCurveHash[fan.index] != packed.hash {
+                    if wmnbAvailable {
+                        helper.setFanCurve(fan.index, devid: devid,
+                                           a1: packed.a1, a2: packed.a2,
+                                           a3: packed.a3, a4: packed.a4) { [weak self] ok, _ in
+                            guard let self else { return }
+                            if !ok { self.wmnbAvailable = false }
+                        }
+                    }
+                    // WMNB 通道不可用时不做兜底强冷（避免退回 SMC 手动把另一把扇搞停），静默降级。
+                    lastCurveHash[fan.index] = packed.hash
+                }
+                turboSMC[role] = false
+                helper.keepFanAlive(fan.index) { _, _ in }
+                lastManualState[fan.index] = true
+                // 回落倒计时：已进入稳态则按「稳态时刻 + 30s」算剩余；仍在拉满爬升则标「拉满中」
+                if let steadyAt = turboSteadyAt[role] {
+                    let remain = max(0, Int(ceil(steadyAt.addingTimeInterval(30).timeIntervalSinceNow)))
+                    turboRemaining[role] = remain
+                    msgs.append(String(format: "%@：强冷中 (满速 %d秒)", role.rawValue, remain))
+                } else {
+                    msgs.append(String(format: "%@：强冷中 (拉满爬升)", role.rawValue))
+                }
+                continue
+            }
 
             switch ctrl.mode {
             case .auto:
@@ -562,6 +686,115 @@ final class AppModel: ObservableObject, RGBBackend {
             lastCurveHash[f.index] = nil
         }
         lastApplyMessage = "已交回固件自动控制"
+    }
+
+    // MARK: 强冷（强制满速 → 稳态后保持 30 秒）
+
+    /// 某把扇是否处于强冷进行中（拉满爬升中，或稳态保持倒计时中）
+    private func isTurboActive(_ role: FanRole) -> Bool {
+        if turboRampingState[role] == true { return true }
+        if let steadyAt = turboSteadyAt[role] {
+            return Date() < steadyAt.addingTimeInterval(30)
+        }
+        return false
+    }
+
+    /// 清除某把扇的强冷状态（内部）。若该扇强冷走的是 SMC 目标转速通道（CPU），
+    /// 退出时把 SMC 手动标志清回固件自动，避免风扇卡在手动目标转速。
+    private func clearTurbo(_ role: FanRole) {
+        if turboSMC[role] == true {
+            if let fan = fans.first(where: { FanRole.from(index: $0.index) == role }) {
+                helper.setFanManual(fan.index, manual: false) { _, _ in }
+            }
+        }
+        turboRampingState.removeValue(forKey: role)
+        turboSteadyAt.removeValue(forKey: role)
+        turboSteadyCount.removeValue(forKey: role)
+        turboLastRPM.removeValue(forKey: role)
+        turboSMC.removeValue(forKey: role)
+    }
+
+    /// 对单扇做一次稳态检测（每秒定时器调用）。仅在「仍在拉满爬升」的扇上生效：
+    /// 判定「到达满转速」＝已接近额定顶速（≥85%）且基本不再爬升。
+    /// 关键：只达到某百分比、但仍在明显爬升时绝不算稳态——否则会在半路提前开始 30s 倒计时，
+    ///       风扇还没冲到顶速（CPU 实测约 7300 / GPU 实测约 7500，均经 WMNB 100% 占空比）就回落，表现为「上不去满速」。
+    /// 风扇冲到顶后会自然停爬，那一刻才判稳态，30s 保持阶段整段都钉在满速。
+    /// 连续 3 次采样即判定稳态；maxRPM>0 守卫（额定读不到时绝不退化成 actual>0 即判定）。
+    /// 安全上限 90s：爬升超 90s 仍未判定稳态，强制进入保持阶段。
+    private func tickTurboRamp(_ role: FanRole, now: Date) {
+        guard turboRampingState[role] == true else { return }
+        let fan = fans.first { FanRole.from(index: $0.index) == role }
+        let actual = fan?.actualRPM ?? 0
+        let maxRPM = fan?.maxRPM ?? 0
+        let last = turboLastRPM[role] ?? 0
+        // 爬升判定线：本扇转速仍在明显上涨（超过该线）即视为「还在爬升」，绝不能算稳态。
+        // 取绝对 8 RPM 与相对 0.3% 额定二者的较大值，把慢速爬升（每秒仍涨几十 RPM）排除在稳态之外。
+        let climbLine = max(8.0, 0.003 * maxRPM)
+        let stillClimbing = actual > last + climbLine
+        // 稳态 = 已接近额定顶速（≥85%）且基本不再爬升。
+        // 只达到百分比、但仍在明显爬升时绝不算稳态（否则半路提前计时、满速还没冲到就回落）。
+        // 风扇冲到各自顶速（CPU 实测约 7300 / GPU 实测约 7500，均经 WMNB 100% 占空比）后会自然停爬，那一刻才判稳态。
+        let steady = maxRPM > 0 && actual >= 0.85 * maxRPM && !stillClimbing
+        if steady {
+            turboSteadyCount[role] = (turboSteadyCount[role] ?? 0) + 1
+        } else {
+            turboSteadyCount[role] = 0
+        }
+        turboLastRPM[role] = actual
+        if (turboSteadyCount[role] ?? 0) >= 3 {
+            turboSteadyAt[role] = now
+            turboRampingState[role] = false
+        } else if now.timeIntervalSince(turboStartAt[role] ?? now) > 90 {
+            turboSteadyAt[role] = now
+            turboRampingState[role] = false
+        }
+    }
+
+    /// 触发强冷：立即把该扇拉到各自软件可控顶速（两扇均经 WMNB 100% 占空比冲满：CPU 实测约 7300 / GPU 实测约 7500，额定分别为 7800 / 7600），
+    /// 待转速到达满速（或物理顶速）后保持 30 秒再回落。
+    /// 回落时若该扇开启「限制最高转速」则停在限制值，否则回到其当前模式（固件自动 / 曲线 / 固定）。
+    func triggerTurbo(_ role: FanRole) {
+        turboRampingState[role] = true
+        turboSteadyAt.removeValue(forKey: role)
+        turboSteadyCount[role] = 0
+        turboLastRPM[role] = 0
+        turboStartAt[role] = Date()
+        turboRamping[role] = true
+        turboRemaining.removeValue(forKey: role)
+        turboSMC.removeValue(forKey: role)
+        applyNow()
+    }
+
+    /// 双扇同时强冷：两把扇同时拉满，互相等到都到达稳态（或都尽力到顶）后，再统一一起保持 30 秒。
+    func triggerTurboAll() {
+        turboAllActive = true
+        turboAllSteadyAt = nil
+        for role in FanRole.allCases { triggerTurbo(role) }
+    }
+
+    /// 取消某把扇未结束的强冷（立即回落到正常模式）
+    func cancelTurbo(_ role: FanRole) {
+        clearTurbo(role)
+        turboRamping.removeValue(forKey: role)
+        turboRemaining.removeValue(forKey: role)
+        // 单扇取消时也退出双扇协调态（若正处于双扇强冷）
+        if turboAllActive {
+            turboAllActive = false
+            turboAllSteadyAt = nil
+        }
+        applyNow()
+    }
+
+    /// 取消全部强冷（双扇按钮用）
+    func cancelTurboAll() {
+        for role in FanRole.allCases { clearTurbo(role) }
+        turboRamping.removeValue(forKey: .cpu)
+        turboRamping.removeValue(forKey: .gpu)
+        turboRemaining.removeValue(forKey: .cpu)
+        turboRemaining.removeValue(forKey: .gpu)
+        turboAllActive = false
+        turboAllSteadyAt = nil
+        applyNow()
     }
 
     // MARK: 持久化

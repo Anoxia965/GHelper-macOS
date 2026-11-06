@@ -395,6 +395,34 @@ struct FanView: View {
                 FanControlCard(role: role)
             }
 
+            // 双扇同时强冷：两把扇互相等到都稳态，再一起开始 30 秒倒计时
+            DashCard("双扇强冷") {
+                HStack(spacing: 8) {
+                    if model.turboAllActive {
+                        Button {
+                            model.cancelTurboAll()
+                        } label: {
+                            if let rem = model.turboRemaining[.cpu], rem > 0 {
+                                Label("双扇强冷 \(rem)s · 点击取消", systemImage: "fan.fill")
+                            } else {
+                                Label("双扇同步中… · 点击取消", systemImage: "fan.fill")
+                            }
+                        }
+                        .buttonStyle(.borderedProminent).tint(.orange)
+                    } else {
+                        Button {
+                            model.triggerTurboAll()
+                        } label: {
+                            Label("双扇强冷 30s", systemImage: "fan.fill")
+                        }
+                        .buttonStyle(.bordered).tint(.orange)
+                    }
+                    Spacer()
+                }
+                Text("两把扇同时拉满，互相等到都到达各自软件可控顶速（CPU 额定 7800 / 实测约 7300；GPU 额定 7600 / 实测约 7500）后，一起保持 30 秒再回落（限速开启时停于限制值）。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+
             if model.anyUsesCPUTemp {
                 DashCard("CPU 温度校准") {
                     HStack {
@@ -440,6 +468,34 @@ struct FanControlCard: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+
+            // 强冷按钮：立即拉满，稳态后保持 30 秒再回落到限速值 / 正常模式
+            HStack(spacing: 8) {
+                let ramping = model.turboRamping[role] == true
+                let remain = model.turboRemaining[role]
+                if ramping || remain != nil {
+                    Button {
+                        // 双扇强冷进行中时，单扇卡片的取消也走双扇统一取消，避免半取消导致协调态错乱
+                        if model.turboAllActive { model.cancelTurboAll() } else { model.cancelTurbo(role) }
+                    } label: {
+                        if model.turboAllActive {
+                            Label(ramping ? "双扇同步中…" : "双扇强冷 \(remain!)s", systemImage: "fan.fill")
+                        } else {
+                            Label(ramping ? "拉满中…" : "强冷 \(remain!)s", systemImage: "fan.fill")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent).tint(.orange)
+                } else {
+                    Button {
+                        model.triggerTurbo(role)
+                    } label: {
+                        Label("强冷 30s", systemImage: "fan.fill")
+                    }
+                    .buttonStyle(.bordered).tint(.orange)
+                }
+                Text("立即冲到各自软件可控顶速（CPU 额定 7800 / 实测约 7300；GPU 额定 7600 / 实测约 7500），到达顶速后保持 30 秒再回落到限速值 / 正常模式")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
 
             if control.mode != .auto {
                 Picker("温度来源", selection: model.controlBinding(role, \.tempSource)) {
@@ -560,11 +616,13 @@ enum AsusFanLimits {
         + "GHRGB kext 未加载或 rgbctl 缺失时自动退回 SMC 通道。"
         + "曲线 8 点打包为 asus-wmi 格式，占空比按固件风扇曲线约定 0–100 百分比"
         + "（实测出厂曲线占空比即 1–90%；切忌按 0–255 写，会被固件夹到满速）。"
-        + "实测最高转速：CPU 风扇空闲~3200、100% 占空比稳态≈7300（F0Mx=7800）；"
-        + "GPU 风扇空闲~2100、100% 占空比≈6500+（F1Mx=7400，且经 WMNB 接管后已可正常控速，此前 SMC 手动会停转）。"
+                    + "实测最高转速：CPU 风扇空闲~3200、100% 占空比稳态≈7300（F0Mx=7800 额定，软件可控上限）；"
+                    + "GPU 风扇空闲~2100、100% 占空比≈7500（F1Mx=7600 额定，软件可控上限；此前 SMC 手动会停转）。"
         + "风扇爬升很慢，改完设定要等约 30–45 秒才到稳态，别以为没生效。"
         + "拿不到有效温度读数时一律交回固件自动，绝不把风扇停在低转速。"
         + "「限制最高转速」开关可把转速压在额定以下（默认 CPU 7500 / GPU 7000 RPM，可调）。"
+        + "「强冷」按钮（每把扇各一个，另有「双扇强冷」一键双扇）会让风扇冲到各自软件可控顶速"
+        + "（CPU 7800 / GPU 7600，受 WMNB 限制实际约 7300 封顶），到达满速后再保持 30 秒才回落，限速开启时停于限制值（CPU 7500 / GPU 7000）。"
 }
 
 // MARK: - 电池
