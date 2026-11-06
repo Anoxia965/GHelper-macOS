@@ -49,6 +49,26 @@ let kHelperPlistPath = "/Library/LaunchDaemons/cn.anoxia.GHelper.helper.plist"
     func applyKeyboardLighting(r: Int, g: Int, b: Int, mode: Int,
                               brightness: Int, speed: Int,
                               reply: @escaping (Bool, String) -> Void)
+
+    /// 通用 WMNB 直通（经 rgbctl 调 GHRGB kext → ACPI ATKD）。
+    /// sig: 0x53564544("DEVS") 写 / 0x53545344("DSTS") 查；devid/a1..a4 为 WMNB 参数。
+    /// 返回 (是否成功, 输出/错误文本)。用于读取风扇曲线缓存与调试。
+    func callWMNB(sig: UInt32, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32,
+                 reply: @escaping (Bool, String) -> Void)
+
+    /// 经 WMNB 写风扇自定义曲线并接管（替代 SMC 手动模式，目标接近 Windows GHelper）。
+    /// devid: 0x00110024=CPU 风扇 / 0x00110025=GPU 风扇。
+    /// a1..a4 为 asus-wmi 打包的 8 点曲线：a1=温度字节(点0..3)，a2=温度字节(点4..7)，
+    /// a3=占空比字节(点0..3)，a4=占空比字节(点4..7)（固件用 0–100，100*percent/255 缩放）。
+    /// 首次接管会先读出厂曲线缓存，看门狗超时/交回时写回出厂曲线（比 SMC Md=0 更彻底）。
+    func setFanCurve(_ index: Int, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32,
+                    reply: @escaping (Bool, String) -> Void)
+
+    /// 把某把扇交回固件自动（写回缓存的出厂曲线）；未缓存出厂曲线时退回 SMC Md=0。
+    func releaseFanCurve(_ index: Int, reply: @escaping (Bool, String) -> Void)
+
+    /// 维持 WMNB 风扇看门狗心跳（不改变曲线，仅刷新 lastCommand，防止 App 活着却被误回收）。
+    func keepFanAlive(_ index: Int, reply: @escaping (Bool, String) -> Void)
 }
 
 // MARK: - 错误

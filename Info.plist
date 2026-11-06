@@ -2,29 +2,29 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key>
-    <string>GHelper</string>
-    <key>CFBundleIdentifier</key>
-    <string>cn.anoxia.GHelper</string>
-    <key>CFBundleName</key>
-    <string>GHelper</string>
-    <key>CFBundleDisplayName</key>
-    <string>GHelper</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.7.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
+	<key>CFBundleDisplayName</key>
+	<string>GHelper</string>
+	<key>CFBundleExecutable</key>
+	<string>GHelper</string>
+	<key>CFBundleIconFile</key>
+	<string>GHelper</string>
+	<key>CFBundleIdentifier</key>
+	<string>cn.anoxia.GHelper</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>GHelper</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.8.0</string>
+	<key>CFBundleVersion</key>
+	<string>1.8.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>GHelper 需要执行脚本以安装特权助手。</string>
 	<key>NSHighResolutionCapable</key>
-    <true/>
-    <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>GHelper 需要执行脚本以安装特权助手。</string>
-    <key>CFBundleIconFile</key>
-    <string>GHelper</string>
+	<true/>
 </dict>
 </plist>

@@ -23,18 +23,21 @@ struct FanCurve: Codable, Equatable {
         switch source {
         case .cpuSMC:
             // 灵敏曲线：本机 Ryzen 9 7940HX 在华硕固件下「固件自动」严重钝，
-            // 80℃ 还不拉高转速。这里改为 75℃ 就到 65%、82℃ 封顶 75%（驱动上限，
-            // 稳态约 6100 RPM），让温度一高风扇立刻跟上。
-            // 30% 以下 fan0 仍卡在 3900 地板，故 floor 从 35% 起步避免浪费。
+            // 80℃ 还不拉高转速。WMNB 通道接管后可按占空比（0–100%）直接控速。
+            // 顶部按 SMC 额定 maxRPM 用满程：100% 占空比稳态 ≈ 7300 RPM，
+            // 固件上限 F0Mx=7800，故末点给到 100%（让固件跑满额定转速）。
+            // 30% 以下 fan0 仍卡在 ~3900 地板，故 floor 从 35% 起步避免浪费。
             return FanCurve(points: zip(
                 [50, 58, 65, 72, 78, 82, 88, 95],
-                [35, 45, 55, 65, 72, 75, 75, 75]
+                [35, 45, 55, 65, 75, 82, 86, 100]
             ).map { CurvePoint(temperature: $0, percent: $1) }, floorPercent: 35)
         case .gpu:
-            // GPU 曲线同样提前提速：72℃ 就 68%、78℃ 封顶 75%
+            // GPU 曲线同样提前提速。注意：GPU 风扇（fan1）经 WMNB 接管后已可正常控速
+            // （此前 SMC 手动会停转），空闲 ≈2100、100% 占空比 ≈6500+（F1Mx=7400 额定）。
+            // 末点给到 100% 占空比，按 SMC 额定上限跑满。
             return FanCurve(points: zip(
                 [40, 50, 58, 65, 72, 78, 84, 90],
-                [30, 38, 48, 58, 68, 75, 75, 75]
+                [30, 38, 48, 60, 70, 82, 86, 100]
             ).map { CurvePoint(temperature: $0, percent: $1) }, floorPercent: 30)
         case .battery:
             return FanCurve(points: zip(
@@ -97,6 +100,11 @@ struct FanControl: Codable, Equatable {
     var tempSource: TempSource = .gpu
     var manualPercent: Double = 55
     var curve: FanCurve = .default(for: .gpu)
+
+    /// 限制最高转速：开启后把实际转速压在 rpmLimit 以下（按 SMC 额定 maxRPM 换算成占空比封顶）。
+    /// 0 = 未设，使用角色默认（CPU 7500 / GPU 7000）。
+    var rpmLimitEnabled: Bool = false
+    var rpmLimit: Double = 0
 
     /// 切到曲线模式时，把曲线重置成「当前温度来源」的默认形状
     mutating func resetCurveToDefault() {

@@ -29,8 +29,10 @@ chmod 755 "$KSRC/GHRGB"
 # ad-hoc 签名（SIP kext-signing 为 Custom Configuration，ad-hoc 可用）
 codesign --force --sign - --timestamp=none "GHRGB.kext"
 
-# kext 必须 root:wheel
-chown -R root:wheel "GHRGB.kext"
+# kext 最终需 root:wheel（加载时要求）；若以 root 执行则在此设置，否则留给安装脚本
+if [ "$(id -u)" = "0" ]; then
+	chown -R root:wheel "GHRGB.kext"
+fi
 chmod -R 755 "GHRGB.kext"
 
 # 源码与产物还给调用者，方便继续编辑

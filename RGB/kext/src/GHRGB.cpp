@@ -42,6 +42,10 @@
 #define GHRGB_UC_SET_BRIGHT 1
 #define GHRGB_UC_GET_STATUS 2
 #define GHRGB_UC_GET_BRIGHT 3
+// 通用 WMNB 调用：结构输入 6×uint64 = {sig, devid, arg1, arg2, arg3, arg4}，
+// 结构输出最多 16 字节（DEVS/DSTS 返回的数据）。风扇曲线 / 电池养护 / 性能档等
+// 全部复用这一个通道，以后不再改 kext。
+#define GHRGB_UC_CALL_WMNB  4
 
 class GHRGB;
 
@@ -71,7 +75,6 @@ private:
 	IOACPIPlatformDevice *fATKD;
 
 	static bool bootArgSet(const char *needle);
-	IOReturn callWMNB(UInt32 sig, UInt32 devid, UInt32 arg1, UInt32 arg2, OSObject **result);
 
 	static void deferredDumpThread(void *param0, void *param1);
 	void deferredDump(void);
@@ -79,6 +82,10 @@ private:
 public:
 	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 	virtual void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
+
+	// 通用 WMNB 调用（风扇曲线 / 电池养护 / 性能档等均复用）。
+	IOReturn callWMNB(UInt32 sig, UInt32 devid, UInt32 arg1, UInt32 arg2,
+	                 UInt32 arg3, UInt32 arg4, OSObject **result);
 
 	IOReturn setRGB(UInt8 mode, UInt8 r, UInt8 g, UInt8 b, UInt8 speed);
 	IOReturn setBrightness(UInt8 level);
@@ -123,24 +130,28 @@ bool GHRGB::bootArgSet(const char *needle)
 	return found;
 }
 
-/* 核心：调用 ATKD 设备的 WMNB 方法。buf[0..3]=devid, [4..7]=arg1, [8..11]=arg2（小端） */
-IOReturn GHRGB::callWMNB(UInt32 sig, UInt32 devid, UInt32 arg1, UInt32 arg2, OSObject **result)
+/* 核心：调用 ATKD 设备的 WMNB 方法。buf[0..3]=devid, [4..7]=arg1, [8..11]=arg2,
+ * [12..15]=arg3, [16..19]=arg4（小端）。arg3/arg4 默认 0，向后兼容 RGB 等旧调用。 */
+IOReturn GHRGB::callWMNB(UInt32 sig, UInt32 devid, UInt32 arg1, UInt32 arg2,
+                        UInt32 arg3, UInt32 arg4, OSObject **result)
 {
 	if (!fATKD) return kIOReturnNotReady;
 	if (result) *result = NULL;
 
-	UInt8 buf[20];
+	UInt8 buf[24];
 	memset(buf, 0, sizeof(buf));
 	for (int i = 0; i < 4; i++) {
-		buf[0 + i] = (devid >> (8 * i)) & 0xFF;
-		buf[4 + i] = (arg1  >> (8 * i)) & 0xFF;
-		buf[8 + i] = (arg2  >> (8 * i)) & 0xFF;
+		buf[0  + i] = (devid >> (8 * i)) & 0xFF;
+		buf[4  + i] = (arg1  >> (8 * i)) & 0xFF;
+		buf[8  + i] = (arg2  >> (8 * i)) & 0xFF;
+		buf[12 + i] = (arg3  >> (8 * i)) & 0xFF;
+		buf[16 + i] = (arg4  >> (8 * i)) & 0xFF;
 	}
 
 	OSObject *params[3];
 	params[0] = OSNumber::withNumber((UInt64)0, 32);
 	params[1] = OSNumber::withNumber((UInt64)sig, 32);
-	params[2] = OSData::withBytes(buf, 20);
+	params[2] = OSData::withBytes(buf, 24);
 	if (!params[0] || !params[1] || !params[2]) {
 		if (params[0]) params[0]->release();
 		if (params[1]) params[1]->release();
@@ -161,7 +172,7 @@ IOReturn GHRGB::setRGB(UInt8 mode, UInt8 r, UInt8 g, UInt8 b, UInt8 speed)
 	UInt32 arg1 = 0xB3UL | ((UInt32)mode << 8) | ((UInt32)r << 16) | ((UInt32)g << 24);
 	UInt32 arg2 = ((UInt32)b) | ((UInt32)speed << 8);
 	OSObject *res = NULL;
-	IOReturn ret = callWMNB(WMNB_DEVS, GHRGB_DEVID_RGB, arg1, arg2, &res);
+	IOReturn ret = callWMNB(WMNB_DEVS, GHRGB_DEVID_RGB, arg1, arg2, 0, 0, &res);
 	if (res) res->release();
 	return ret;
 }
@@ -172,7 +183,7 @@ IOReturn GHRGB::setBrightness(UInt8 level)
 {
 	UInt32 arg1 = 0x80UL | ((UInt32)(level & 0x0F));
 	OSObject *res = NULL;
-	IOReturn ret = callWMNB(WMNB_DEVS, GHRGB_DEVID_KBD_BL, arg1, 0, &res);
+	IOReturn ret = callWMNB(WMNB_DEVS, GHRGB_DEVID_KBD_BL, arg1, 0, 0, 0, &res);
 	if (res) res->release();
 	return ret;
 }
@@ -182,7 +193,7 @@ IOReturn GHRGB::setPower(UInt8 flags)
 	/* DEVID 0x00100057: arg1 = 0xBD | (cmd<<8) | (flags<<16) ; arg2 = 0 */
 	UInt32 arg1 = 0xBDUL | ((UInt32)flags << 16);
 	OSObject *res = NULL;
-	IOReturn ret = callWMNB(WMNB_DEVS, GHRGB_DEVID_PWR, arg1, 0, &res);
+	IOReturn ret = callWMNB(WMNB_DEVS, GHRGB_DEVID_PWR, arg1, 0, 0, 0, &res);
 	if (res) res->release();
 	return ret;
 }
@@ -190,7 +201,7 @@ IOReturn GHRGB::setPower(UInt8 flags)
 IOReturn GHRGB::getStatus(UInt8 out[8], UInt32 *outLen)
 {
 	OSObject *res = NULL;
-	IOReturn ret = callWMNB(WMNB_DSTS, GHRGB_DEVID_READ, 0, 0, &res);
+	IOReturn ret = callWMNB(WMNB_DSTS, GHRGB_DEVID_READ, 0, 0, 0, 0, &res);
 	if (ret != kIOReturnSuccess || !res) return ret;
 	OSData *d = OSDynamicCast(OSData, res);
 	if (d) {
@@ -208,7 +219,7 @@ IOReturn GHRGB::getStatus(UInt8 out[8], UInt32 *outLen)
 IOReturn GHRGB::getBrightness(UInt32 *outLevel)
 {
 	OSObject *res = NULL;
-	IOReturn ret = callWMNB(WMNB_DSTS, GHRGB_DEVID_KBD_BL, 0, 0, &res);
+	IOReturn ret = callWMNB(WMNB_DSTS, GHRGB_DEVID_KBD_BL, 0, 0, 0, 0, &res);
 	if (ret != kIOReturnSuccess || !res) return ret;
 	OSNumber *n = OSDynamicCast(OSNumber, res);
 	if (n) {
@@ -361,6 +372,34 @@ IOReturn GHRGBUserClient::externalMethod(uint32_t selector,
 		if (args->scalarOutput && args->scalarOutputCount >= 1) {
 			args->scalarOutput[0] = lvl;
 			args->scalarOutputCount = 1;
+		}
+		return kIOReturnSuccess;
+	}
+	case GHRGB_UC_CALL_WMNB: {
+		// 结构输入 6×uint64 = {sig, devid, arg1, arg2, arg3, arg4}
+		if (!args->structureInput || args->structureInputSize < 6 * (int)sizeof(uint64_t))
+			return kIOReturnBadArgument;
+		const uint64_t *s = (const uint64_t *)args->structureInput;
+		UInt32 sig   = (UInt32)s[0];
+		UInt32 devid = (UInt32)s[1];
+		UInt32 a1    = (UInt32)s[2];
+		UInt32 a2    = (UInt32)s[3];
+		UInt32 a3    = (UInt32)s[4];
+		UInt32 a4    = (UInt32)s[5];
+		OSObject *res = NULL;
+		IOReturn r = fDriver->callWMNB(sig, devid, a1, a2, a3, a4, &res);
+		if (r != kIOReturnSuccess) return r;
+		if (res) {
+			if (args->structureOutput && args->structureOutputSize >= 16) {
+				OSData *d = OSDynamicCast(OSData, res);
+				if (d) {
+					UInt32 n  = d->getLength();
+					UInt32 cpy = (n > 16) ? 16 : n;
+					memcpy(args->structureOutput, d->getBytesNoCopy(), cpy);
+					args->structureOutputSize = cpy;
+				}
+			}
+			res->release();
 		}
 		return kIOReturnSuccess;
 	}

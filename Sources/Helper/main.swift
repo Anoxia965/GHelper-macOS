@@ -17,6 +17,10 @@ final class HelperService: NSObject, HelperProtocol {
     private var watchdogTimer: Timer?
     private var manualFans: Set<Int> = []
 
+    // WMNB 风扇曲线接管状态（独立于 SMC 手动模式）
+    private var wmnbFans: Set<Int> = []
+    private var wmnbFactory: [Int: (devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32)] = [:]
+
     override init() {
         super.init()
         do {
@@ -39,10 +43,16 @@ final class HelperService: NSObject, HelperProtocol {
     }
 
     private func checkWatchdog() {
-        guard !manualFans.isEmpty else { return }
-        guard Date().timeIntervalSince(lastCommand) > kWatchdogSeconds else { return }
-        NSLog("[GHelper Helper] 心跳超时 \(kWatchdogSeconds)s，风扇交回固件")
-        releaseAll()
+        if !manualFans.isEmpty,
+           Date().timeIntervalSince(lastCommand) > kWatchdogSeconds {
+            NSLog("[GHelper Helper] 心跳超时 \(kWatchdogSeconds)s，SMC 风扇交回固件")
+            releaseAll()
+        }
+        if !wmnbFans.isEmpty,
+           Date().timeIntervalSince(lastCommand) > kWatchdogSeconds {
+            NSLog("[GHelper Helper] 心跳超时 \(kWatchdogSeconds)s，WMNB 风扇交回出厂曲线")
+            releaseAllWMNB()
+        }
     }
 
     private func releaseAll() {
@@ -55,6 +65,103 @@ final class HelperService: NSObject, HelperProtocol {
             }
         }
         manualFans.removeAll()
+    }
+
+    // MARK: WMNB 风扇曲线
+
+    /// 把 rgbctl wmnb DSTS 返回的 16 字节解析为 4 个 uint32（小端）——与写入打包格式一致
+    private func parseCurveBytes(_ text: String) -> (UInt32, UInt32, UInt32, UInt32)? {
+        let parts = text.split(separator: " ")
+        let hex = parts.compactMap { UInt8($0, radix: 16) }
+        guard hex.count >= 16 else { return nil }
+        let b = Array(hex.suffix(16))
+        let u32: (Int) -> UInt32 = { i in
+            UInt32(b[i]) | (UInt32(b[i + 1]) << 8) | (UInt32(b[i + 2]) << 16) | (UInt32(b[i + 3]) << 24)
+        }
+        return (u32(0), u32(4), u32(8), u32(12))
+    }
+
+    private func releaseAllWMNB() {
+        for i in wmnbFans {
+            if let fac = wmnbFactory[i] {
+                let _ = runRGBCTL([
+                    "wmnb", "0x53564544", String(format: "0x%x", fac.devid),
+                    String(format: "0x%x", fac.a1), String(format: "0x%x", fac.a2),
+                    String(format: "0x%x", fac.a3), String(format: "0x%x", fac.a4)
+                ])
+                NSLog("[GHelper Helper] fan\(i) 写回出厂曲线")
+            } else {
+                // 没缓存出厂曲线：退回 SMC 交回
+                do { try smc.writeUInt8("F\(i)Md", 0) } catch {}
+                NSLog("[GHelper Helper] fan\(i) 无出厂缓存，退回 SMC 交回")
+            }
+        }
+        wmnbFans.removeAll()
+    }
+
+    func callWMNB(sig: UInt32, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32,
+                  reply: @escaping (Bool, String) -> Void) {
+        touch()
+        let (ok, msg) = runRGBCTL([
+            "wmnb",
+            String(format: "0x%x", sig), String(format: "0x%x", devid),
+            String(format: "0x%x", a1), String(format: "0x%x", a2),
+            String(format: "0x%x", a3), String(format: "0x%x", a4)
+        ])
+        reply(ok, msg)
+    }
+
+    func setFanCurve(_ index: Int, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32,
+                     reply: @escaping (Bool, String) -> Void) {
+        touch()
+        // 1) 首次接管该扇：先读出厂曲线缓存，供看门狗/交回写回
+        if wmnbFactory[index] == nil {
+            let (okRead, readText) = runRGBCTL([
+                "wmnb", "0x53545344", String(format: "0x%x", devid), "0", "0", "0", "0"])
+            if okRead, let fac = parseCurveBytes(readText) {
+                wmnbFactory[index] = (devid, fac.0, fac.1, fac.2, fac.3)
+                NSLog("[GHelper Helper] fan\(index) 缓存出厂曲线 devid=0x\(String(format: "%x", devid))")
+            } else {
+                NSLog("[GHelper Helper] fan\(index) 读取出厂曲线失败：\(readText)")
+            }
+        }
+        // 2) 写自定义曲线接管
+        let (ok, msg) = runRGBCTL([
+            "wmnb", "0x53564544", String(format: "0x%x", devid),
+            String(format: "0x%x", a1), String(format: "0x%x", a2),
+            String(format: "0x%x", a3), String(format: "0x%x", a4)
+        ])
+        if ok {
+            wmnbFans.insert(index)
+            reply(true, "已接管风扇曲线（devid=0x\(String(format: "%x", devid))）")
+        } else {
+            reply(false, msg)
+        }
+    }
+
+    func releaseFanCurve(_ index: Int, reply: @escaping (Bool, String) -> Void) {
+        touch()
+        if let fac = wmnbFactory[index] {
+            let (ok, msg) = runRGBCTL([
+                "wmnb", "0x53564544", String(format: "0x%x", fac.devid),
+                String(format: "0x%x", fac.a1), String(format: "0x%x", fac.a2),
+                String(format: "0x%x", fac.a3), String(format: "0x%x", fac.a4)
+            ])
+            wmnbFans.remove(index)
+            reply(ok, ok ? "已交回出厂曲线" : msg)
+        } else {
+            do {
+                try smc.writeUInt8("F\(index)Md", 0)
+                reply(true, "未缓存出厂曲线，已退回 SMC 交回")
+            } catch {
+                reply(false, error.localizedDescription)
+            }
+        }
+    }
+
+    func keepFanAlive(_ index: Int, reply: @escaping (Bool, String) -> Void) {
+        touch()
+        reply(true, "")
     }
 
     private func touch() { lastCommand = Date() }
@@ -372,6 +479,7 @@ final class HelperService: NSObject, HelperProtocol {
         boostReapplyTimer?.invalidate()
         boostReapplyTimer = nil
         releaseAll()
+        releaseAllWMNB()
         let script = """
         launchctl bootout system/\(kHelperMachServiceName) 2>/dev/null || \
         launchctl unload -w \(kHelperPlistPath) 2>/dev/null; \

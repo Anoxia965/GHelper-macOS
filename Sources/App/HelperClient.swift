@@ -115,6 +115,45 @@ final class HelperClient: ObservableObject {
         proxy()?.setFanTargetRPM(index, rpm: rpm, reply: completion)
     }
 
+    /// 通用 WMNB 直通（经助手 → rgbctl → GHRGB kext）。用于读取风扇曲线缓存与调试。
+    func callWMNB(sig: UInt32, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32,
+                 completion: @escaping (Bool, String) -> Void) {
+        guard let proxy = proxy() else {
+            completion(false, "特权助手未连接，请到设置页重装")
+            return
+        }
+        proxy.callWMNB(sig: sig, devid: devid, a1: a1, a2: a2, a3: a3, a4: a4, reply: completion)
+    }
+
+    /// 经 WMNB 写风扇自定义曲线并接管（替代 SMC 手动模式）。
+    /// devid: 0x00110024=CPU 风扇 / 0x00110025=GPU 风扇；a1..a4 为 asus-wmi 打包的 8 点曲线。
+    func setFanCurve(_ index: Int, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32,
+                     completion: @escaping (Bool, String) -> Void) {
+        guard let proxy = proxy() else {
+            completion(false, "特权助手未连接，请到设置页重装")
+            return
+        }
+        proxy.setFanCurve(index, devid: devid, a1: a1, a2: a2, a3: a3, a4: a4, reply: completion)
+    }
+
+    /// 把某把扇交回固件自动（写回出厂曲线；未缓存时退回 SMC Md=0）。
+    func releaseFanCurve(_ index: Int, completion: @escaping (Bool, String) -> Void) {
+        guard let proxy = proxy() else {
+            completion(false, "特权助手未连接，请到设置页重装")
+            return
+        }
+        proxy.releaseFanCurve(index, reply: completion)
+    }
+
+    /// 维持 WMNB 风扇看门狗心跳（不改变曲线，仅刷新助手侧 lastCommand）。
+    func keepFanAlive(_ index: Int, completion: @escaping (Bool, String) -> Void) {
+        guard let proxy = proxy() else {
+            completion(false, "特权助手未连接，请到设置页重装")
+            return
+        }
+        proxy.keepFanAlive(index, reply: completion)
+    }
+
     func writeKey(_ key: String, value: Double, completion: @escaping (Bool, String) -> Void) {
         proxy()?.writeKey(key, value: value, reply: completion)
     }

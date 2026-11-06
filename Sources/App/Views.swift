@@ -435,59 +435,69 @@ struct FanControlCard: View {
 
     var body: some View {
         DashCard(role.rawValue) {
-            if role == .gpu {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .top, spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(Brand.amber).font(.system(size: 11))
-                        Text("本机 AsusFanSMC 对 GPU 风扇的手动/曲线控制不生效——切到手动即停转，只能固件自动。")
-                            .font(.system(size: 10)).foregroundStyle(Brand.amber)
-                    }
-                    HStack {
-                        Text("模式").font(.system(size: 12)).foregroundStyle(.secondary)
-                        Spacer()
-                        Text("固件自动（仅此有效）").font(.system(size: 12))
-                    }
-                    Text("如需 GPU 风扇也能手动控速，需要换支持 fan1 手动的 AsusFanSMC 版本。")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+            Picker("", selection: model.controlBinding(role, \.mode)) {
+                ForEach(FanMode.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if control.mode != .auto {
+                Picker("温度来源", selection: model.controlBinding(role, \.tempSource)) {
+                    ForEach(TempSource.allCases) { Text($0.rawValue).tag($0) }
                 }
-            } else {
-                Picker("", selection: model.controlBinding(role, \.mode)) {
-                    ForEach(FanMode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
                 .labelsHidden()
+                Text(control.tempSource.hint)
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
 
-                if control.mode != .auto {
-                    Picker("温度来源", selection: model.controlBinding(role, \.tempSource)) {
-                        ForEach(TempSource.allCases) { Text($0.rawValue).tag($0) }
+                HStack {
+                    Text("当前读数").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Spacer()
+                    if let t = model.temperature(for: control.tempSource) {
+                        Text(String(format: "%.0f %@", t, control.tempSource.unit))
+                            .font(.system(size: 12, weight: .medium)).monospacedDigit()
+                    } else {
+                        Text("不可用").foregroundStyle(.red).font(.system(size: 12))
                     }
-                    .labelsHidden()
-                    Text(control.tempSource.hint)
+                }
+            }
+
+            if control.mode == .manual {
+                HStack {
+                    Slider(value: model.controlBinding(role, \.manualPercent), in: 20...100, step: 5)
+                    Text(String(format: "%.0f%%", control.manualPercent))
+                        .font(.system(size: 12)).monospacedDigit().frame(width: 38)
+                }
+            }
+
+            if control.mode == .curve {
+                CurveEditor(role: role)
+            }
+
+            if control.mode != .auto {
+                Divider().padding(.vertical, 4)
+                HStack {
+                    Toggle("限制最高转速", isOn: Binding(
+                        get: { model.controls[role]?.rpmLimitEnabled ?? false },
+                        set: { on in
+                            var c = model.controls[role] ?? FanControl()
+                            if on, c.rpmLimit == 0 { c.rpmLimit = (role == .cpu ? 7500 : 7000) }
+                            c.rpmLimitEnabled = on
+                            model.controls[role] = c
+                        }))
+                        .toggleStyle(.switch).font(.system(size: 12))
+                    Spacer()
+                    if control.rpmLimitEnabled {
+                        TextField("", value: model.controlBinding(role, \.rpmLimit), format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 72).monospacedDigit()
+                        Text("RPM").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+                if control.rpmLimitEnabled {
+                    let lim = control.rpmLimit > 0 ? control.rpmLimit : (role == .cpu ? 7500 : 7000)
+                    let maxRPM = model.fans.first { FanRole.from(index: $0.index) == role }?.maxRPM ?? 0
+                    Text(String(format: "封顶 %.0f RPM（额定 %.0f）", lim, maxRPM))
                         .font(.system(size: 10)).foregroundStyle(.secondary)
-
-                    HStack {
-                        Text("当前读数").font(.system(size: 12)).foregroundStyle(.secondary)
-                        Spacer()
-                        if let t = model.temperature(for: control.tempSource) {
-                            Text(String(format: "%.0f %@", t, control.tempSource.unit))
-                                .font(.system(size: 12, weight: .medium)).monospacedDigit()
-                        } else {
-                            Text("不可用").foregroundStyle(.red).font(.system(size: 12))
-                        }
-                    }
-                }
-
-                if control.mode == .manual {
-                    HStack {
-                        Slider(value: model.controlBinding(role, \.manualPercent), in: 20...100, step: 5)
-                        Text(String(format: "%.0f%%", control.manualPercent))
-                            .font(.system(size: 12)).monospacedDigit().frame(width: 38)
-                    }
-                }
-
-                if control.mode == .curve {
-                    CurveEditor(role: role)
                 }
             }
         }
@@ -531,8 +541,12 @@ struct CurveEditor: View {
                     .frame(width: 100)
             }
 
-            Button("恢复该来源的默认曲线") { model.resetCurve(role) }
-                .buttonStyle(.borderless).font(.system(size: 11))
+            Button {
+                model.resetCurve(role)
+            } label: {
+                Label("恢复默认曲线", systemImage: "arrow.counterclockwise")
+            }
+            .buttonStyle(.bordered).font(.system(size: 11))
 
             Text(AsusFanLimits.note)
                 .font(.system(size: 10)).foregroundStyle(.secondary)
@@ -542,11 +556,15 @@ struct CurveEditor: View {
 
 enum AsusFanLimits {
     static let note =
-        "实测稳态：5%→3900/2400，30%→3900/3700，50%→4800/4700，75%→6100 RPM（仅 CPU 风扇可靠）。"
-        + "占空比封顶 75%，但 75% 已能到 6100 转，够覆盖 6000 的目标。"
-        + "风扇爬升很慢，改完设定要等约 30 秒才到稳态，别以为没生效。"
-        + "fan0 在 30% 以下有 3900 转的地板，再调低也降不下去。"
-        + "注意：GPU 风扇（fan1）在本机驱动下手动控制不生效，只能固件自动。"
+        "风扇曲线经 WMNB/EC 直连下发（CPU=0x00110024 / GPU=0x00110025），两把扇都可接管；"
+        + "GHRGB kext 未加载或 rgbctl 缺失时自动退回 SMC 通道。"
+        + "曲线 8 点打包为 asus-wmi 格式，占空比按固件风扇曲线约定 0–100 百分比"
+        + "（实测出厂曲线占空比即 1–90%；切忌按 0–255 写，会被固件夹到满速）。"
+        + "实测最高转速：CPU 风扇空闲~3200、100% 占空比稳态≈7300（F0Mx=7800）；"
+        + "GPU 风扇空闲~2100、100% 占空比≈6500+（F1Mx=7400，且经 WMNB 接管后已可正常控速，此前 SMC 手动会停转）。"
+        + "风扇爬升很慢，改完设定要等约 30–45 秒才到稳态，别以为没生效。"
+        + "拿不到有效温度读数时一律交回固件自动，绝不把风扇停在低转速。"
+        + "「限制最高转速」开关可把转速压在额定以下（默认 CPU 7500 / GPU 7000 RPM，可调）。"
 }
 
 // MARK: - 电池

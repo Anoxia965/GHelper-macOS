@@ -3,7 +3,7 @@
 把 Windows 上华硕笔记本的 **GHelper** 风扇 / 传感器控制，**用原生 Swift 重写**成 macOS 菜单栏 App，面向 **黑苹果（Hackintosh）** 用户。
 不是把 `GHelper.exe` 搬过来，而是重新实现了它最核心的能力：读传感器、按温度控风扇、独立控制 CPU / GPU 风扇。
 
-> 当前针对 **华硕 ROG + AMD Ryzen（MacBookPro16,4 SMBIOS）** 的机器调校并实测；风扇控制核心是**与 CPU 品牌无关的**（走的都是 AppleSMC 读写），
+> 当前针对 **华硕 ROG + AMD Ryzen（MacBookPro16,4 SMBIOS）** 的机器调校并实测；风扇控制核心是**与 CPU 品牌无关的**（优先走华硕 EC/WMNB 直连通道，兜底走 AppleSMC 读写），
 > Intel 机型的兄弟下载下来改改温度来源 / 风扇后端也能用，欢迎一起完善（见文末「Intel 机型 / 一起参与开发」）。
 
 ---
@@ -14,6 +14,8 @@
 - **每把风扇独立控制**：CPU 风扇（fan0）和 GPU 风扇（fan1）各自可选
   - 模式：**固件自动 / 自定义曲线 / 固定转速**
   - 温度来源（非自动时）：CPU(SMC) / GPU / 电池 / CPU 占用率
+  - **限制最高转速**：可开「限制最高转速」开关并填目标 RPM（默认 CPU 7500 / GPU 7000，压在额定以下），开启后曲线 / 固定转速 / SMC 兜底全部夹到上限以下
+  - **恢复默认曲线**：曲线调乱了一键还原
 - **传感器监控**：CPU / GPU 温度、CPU / GPU 占用率、CPU 实时频率、电池温度与循环次数、每把风扇的实际/目标转速与占空比。
 - **硬件信息页**：自动探测 macOS 版本、SMBIOS、CPU、内存、PCI 显卡、OpenCore、SIP、SMC 后端、kext 加载状态等（读不到显示「—」，不写死本机信息）。
 - **CPU 温度校准**：AMD 的 Tctl 往往偏高，设置里用偏移滑块现场校准（默认 0）。
@@ -51,7 +53,7 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `GHelper.dmg` | **安装包**（双击打开，内含 `GHelper.app` + 所需驱动 `Kexts/` + 说明） |
+| `GHelper.pkg` | **安装包**（双击按提示装到 `/Applications`，内含 `GHelper.app` + 所需驱动 `Kexts/`） |
 | `Kexts.zip` | 只想要驱动时下载：VirtualSMC、Lilu、AsusFanSMC、SMCAMDProcessor、AMDRyzenCPUPowerManagement |
 
 > 想自己编译源码，见文末「从源码构建」。
@@ -74,7 +76,7 @@ OpenCore 在开机时会自动**注入**这些 kext，所以**不能**装到 `/L
 
 ### 第 3 步：安装 App
 
-1. 双击打开 `GHelper.dmg`，把里面的 `GHelper.app` 拖到 `/Applications`（驱动已在 DMG 的 `Kexts/` 里，见第 2 步）。
+1. 双击 `GHelper.pkg`，按提示安装到 `/Applications`（驱动已在安装包的 `Kexts/` 里，见第 2 步）。
 2. 打开 App。若被 Gatekeeper 拦住：右键「打开」，或在终端执行
    ```bash
    xattr -dr com.apple.quarantine /Applications/GHelper.app
@@ -96,8 +98,8 @@ OpenCore 在开机时会自动**注入**这些 kext，所以**不能**装到 `/L
 ### 检查更新 / 一键更新
 
 - 设置页点 **检查更新**，App 会去 GitHub Releases 看有没有新版本（启动时也会静默查一次，有新版顶部会亮角标）。
-- 发现新版点 **下载并更新**：自动下载 DMG → **删掉旧安装（移到废纸篓）** → 装新版 → 重启。更新后如驱动有变，再点「安装 / 重装」助手即可。
-- **以后发新版**：往 GitHub 打 tag 发 Release、附上 `GHelper.dmg` 即可，用户端点「检查更新」就能收到。
+- 发现新版点 **下载并更新**：自动下载安装包 → **删掉旧安装（移到废纸篓）** → 装新版 → 重启。更新后如驱动有变，再点「安装 / 重装」助手即可。
+- **以后发新版**：往 GitHub 打 tag 发 Release、附上 `GHelper.pkg` 即可，用户端点「检查更新」就能收到。
 
 ---
 
@@ -105,7 +107,7 @@ OpenCore 在开机时会自动**注入**这些 kext，所以**不能**装到 `/L
 
 - **菜单栏图标**：点开是快速面板——CPU 型号 / 温度 / 占用 / 频率、核心占用网格、风扇转速、显卡温度与占用，都在一屏内（不滚动）；切风扇模式、开「展开到独立窗口」也在这里。
 - **大窗口**：点 Dock 图标或面板上的「窗口」按钮打开；关窗不退出，只隐藏。
-- **独立控制**：CPU 风扇和 GPU 风扇各选模式与温度来源；非自动模式下用滑块或曲线编辑器设定转速。
+- **独立控制**：CPU 风扇和 GPU 风扇各选模式与温度来源；非自动模式下用滑块或曲线编辑器设定转速，并可开「限制最高转速」把转速压在额定以下；曲线调乱了点「恢复默认曲线」一键还原。
 - **校准**：CPU 温度偏高就在设置里拉 `cpuTempOffset` 偏移。
 
 ---
@@ -117,12 +119,12 @@ GHelper.app  (菜单栏 + 窗口，普通用户进程)
    │  NSXPCConnection  ── mach 服务 cn.anoxia.GHelper.helper
    ▼
 cn.anoxia.GHelper.helper  (root LaunchDaemon)
-   │  AppleSMC IOConnectCallStructMethod (selector=2)
+   ├─ 风扇写：GHRGB kext → ACPI WMNB / EC 直连（优先）或 AppleSMC IOConnectCallStructMethod (selector=2) 兜底
    ▼
-内核 SMC  ←→  AsusFanSMC 驱动  ←→  物理风扇
+华硕 EC / AppleSMC  ←→  物理风扇
 ```
 
-为什么需要 root 助手：AppleSMC 的**写操作**只允许特权进程（否则返回 `kIOReturnNotReady`），所以「写风扇转速」都经 XPC 转发给 root 助手执行。
+为什么需要 root 助手：AppleSMC 的**写操作**只允许特权进程（否则返回 `kIOReturnNotReady`），而风扇写优先走的 **ACPI WMNB/EC 直连通道**也要经内核驱动（`GHRGB.kext`）做特权 ioctl，所以「写风扇转速」都经 XPC 转发给 root 助手执行。
 
 助手带 **15 秒看门狗**：App 超过 15 秒没续心跳（比如崩了），助手自动把风扇**交回固件自动**，避免卡在低转速过热。这是安全兜底，请勿移除。
 
@@ -130,17 +132,18 @@ cn.anoxia.GHelper.helper  (root LaunchDaemon)
 
 ## 风扇控制要点（实测）
 
-- **占空比驱动封顶 75%**，但 75% 稳态已能到 **6100 RPM**，够覆盖 6000 目标；不必折腾 `-asusfanpct`。
-- **风扇爬升很慢**：改完设定后要等约 **30–40 秒** 才到稳态，别以为没生效。
-- **fan0（CPU 风扇）手动 / 曲线 / 自动都能正常接管**。
-- ⚠️ **fan1（GPU 风扇）在本机 AsusFanSMC 下，一旦切到手动/曲线就停转，只能固件自动**（实测：手动→0 RPM，自动→稳稳 2100 RPM）。这是驱动行为，不是 App bug。App 已做保护：即便 UI 选了 GPU 风扇的非自动模式，也会强制交回固件自动并提示，绝不会误停 GPU 风扇。
-- 想要原生 7000+ 转需要 ≥80% 触发固件 Turbo，由固件按温度调度（App 不强制）。
+- **占空比是 0–100 百分比，不是 0–255**：本机固件风扇曲线约定占空比 1–100，实测出厂曲线占空比字节即 `[1,6,10,15,20,23,28,90]`。App 按此下发，切忌按 0–255 写（会把 50% 写成 128，被固件夹到满速）。无需再折腾 `-asusfanpct`（该 bootarg 本机实测无效）。
+- **风扇爬升很慢**：改完设定后要等约 **30–45 秒** 才到稳态，别以为没生效。
+- **两把扇都走 WMNB/EC 直连通道接管**（CPU=0x00110024 / GPU=0x00110025，经 GHRGB kext 通用选择器 4），手动 / 曲线 / 自动均可；GHRGB kext 未加载或 rgbctl 缺失时自动退回 SMC（`F{i}Md`/`F{i}Tg`）兜底。
+- **GPU 风扇现在也能正常控速**：之前在 SMC 通道下切手动会停转，改走 WMNB 曲线下发（与 Windows GHelper 同款机制）后两把扇都能平滑接管。
+- **限制最高转速**：每把扇可开「限制最高转速」开关并填目标 RPM（默认 CPU 7500 / GPU 7000，压在额定 F0Mx=7800 / F1Mx=7400 以下）；开启后曲线 / 固定转速 / SMC 兜底全部夹到上限以下（多留 3% 余量，确保不突破）。
+- **实测最高转速**：CPU 空闲~3200、100% 占空比稳态≈7300（F0Mx=7800）；GPU 空闲~2100、100% 占空比≈6500+（F1Mx=7400，仍在爬升）。想要原生 7000+ 转需 ≥80% 触发固件 Turbo，由固件按温度调度（App 不强制）。
 
 ---
 
 ## Intel 机型 / 一起参与开发
 
-风扇控制的核心是**通用的**：App 通过 AppleSMC（由 VirtualSMC 提供）读写风扇键，与 CPU 是 AMD 还是 Intel 无关。
+风扇控制的核心是**通用的**：App 通过华硕 EC/WMNB 直连通道（由 `GHRGB.kext` 提供）或 AppleSMC（由 VirtualSMC 提供）读写风扇键，与 CPU 是 AMD 还是 Intel 无关。
 不同点只在「温度从哪读、风扇键叫什么」：
 
 - **Intel + 华硕主板**：`AsusFanSMC` 同样适用（按主板走），风扇控制基本开箱即用；CPU 温度走 VirtualSMC 自带键，不需要那两个 AMD kext。
@@ -182,9 +185,10 @@ cd GHelper-macOS
 
 ## 已知限制 / 待办
 
-- GPU 风扇手动控制受 AsusFanSMC 驱动限制，目前只能自动（见上）。彻底解决需更换支持 fan1 手动的驱动版本。
+- 风扇曲线走 WMNB 通道需要 **GHRGB kext 含通用 WMNB 选择器（v2+）**，该 kext 改动后需重启一次加载；App / 助手 / rgbctl 均为用户态，重启后可随时改随时测。
+- 若 GHRGB kext 未加载或 rgbctl 缺失，风扇控制自动退回 SMC 通道（仅 CPU 风扇可靠，GPU 风扇在 SMC 下仍受限）。
 - 某些信息（OpenCore 版本、SIP 状态）在普通用户权限下读不到，会显示「未检测」，属正常降级。
-- 未来可做：打包成 dmg + 一键卸载脚本；抽象风扇后端以支持更多主板 / Intel。
+- 未来可做：一键卸载脚本；抽象风扇后端以支持更多主板 / Intel。
 
 ---
 

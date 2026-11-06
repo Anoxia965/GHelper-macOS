@@ -380,6 +380,15 @@ final class AppModel: ObservableObject, RGBBackend {
 
     /// 上一次每把扇真正下发的「是否手动」状态，避免重复指令
     private var lastManualState: [Int: Bool] = [:]
+    /// 上一次已上传到固件的曲线哈希（仅变化时才重新下发，避免每 3s 刷 EC）
+    private var lastCurveHash: [Int: Int] = [:]
+    /// WMNB 通道是否可用。首次探测失败后置 false，之后曲线/手动模式直接走 SMC 兜底，
+    /// 不再反复尝试 WMNB（也避免刷失败日志）。App 重启（如重启后）会重新探测。
+    private var wmnbAvailable: Bool = true
+
+    // WMNB 风扇曲线 devid：0x00110024=CPU 风扇 / 0x00110025=GPU 风扇（asus-wmi 同款）
+    private static let wmnbDevidCPU: UInt32 = 0x00110024
+    private static let wmnbDevidGPU: UInt32 = 0x00110025
 
     func applyNow() {
         guard helper.isInstalled else {
@@ -392,59 +401,165 @@ final class AppModel: ObservableObject, RGBBackend {
         for fan in fans {
             let role = FanRole.from(index: fan.index)
             let ctrl = controls[role] ?? FanControl()
+            let devid: UInt32 = (role == .cpu) ? Self.wmnbDevidCPU : Self.wmnbDevidGPU
             let temp = temperature(for: ctrl.tempSource)
-
-            // 驱动限制：本机 AsusFanSMC 下 fan1（GPU 风扇）一旦切到手动/曲线
-            // （Md=1）就停转，只能固件自动（Md=0）。强行接管会让 GPU 风扇停掉、
-            // 散热失控，所以这里强制交回固件并提示，避免误选导致停转。
-            if role == .gpu && ctrl.mode != .auto {
-                if lastManualState[fan.index] != false {
-                    helper.setFanManual(fan.index, manual: false) { _, _ in }
-                }
-                lastManualState[fan.index] = false
-                msgs.append("\(role.rawValue)：驱动不支持手动，已交回固件自动")
-                continue
-            }
 
             switch ctrl.mode {
             case .auto:
                 if lastManualState[fan.index] != false {
-                    helper.setFanManual(fan.index, manual: false) { _, _ in }
+                    helper.releaseFanCurve(fan.index) { _, _ in }
                 }
                 lastManualState[fan.index] = false
+                lastCurveHash[fan.index] = nil
                 msgs.append("\(role.rawValue)：固件自动")
 
             case .curve:
                 guard let t = temp, t > 0 else {
-                    // 没有有效温度 → 不接管，交回固件
+                    // 没有有效温度 → 不接管，交回固件（安全底线）
                     if lastManualState[fan.index] != false {
-                        helper.setFanManual(fan.index, manual: false) { _, _ in }
+                        helper.releaseFanCurve(fan.index) { _, _ in }
                     }
                     lastManualState[fan.index] = false
                     msgs.append("\(role.rawValue)：无温度→交回固件")
                     continue
                 }
-                let pct = ctrl.curve.percent(at: t)
-                let rpm = fan.maxRPM * pct / 100
-                helper.setFanTargetRPM(fan.index, rpm: rpm) { _, _ in }
+                // 限制最高转速：把整条曲线（含当前温点插值）按 SMC 额定 maxRPM 换算的占空比封顶
+                let (capDuty, limitRPM) = rpmCap(for: ctrl, role: role, maxRPM: fan.maxRPM)
+                var sendCurve = ctrl.curve
+                var pctAtTemp = ctrl.curve.percent(at: t)
+                if let cap = capDuty {
+                    sendCurve.points = sendCurve.points.map { p in
+                        var q = p; q.percent = min(q.percent, cap); return q
+                    }
+                    pctAtTemp = min(pctAtTemp, cap)
+                }
+                let packed = packCurve(sendCurve)
+                if lastCurveHash[fan.index] != packed.hash {
+                    if wmnbAvailable {
+                        helper.setFanCurve(fan.index, devid: devid,
+                                           a1: packed.a1, a2: packed.a2,
+                                           a3: packed.a3, a4: packed.a4) { [weak self] ok, _ in
+                            guard let self else { return }
+                            if ok {
+                                self.wmnbAvailable = true
+                            } else {
+                                // WMNB 不可用（驱动未加载/工具缺失）→ 退回 SMC 单点目标转速
+                                self.wmnbAvailable = false
+                                self.helper.setFanManual(fan.index, manual: true) { _, _ in }
+                                self.helper.setFanTargetRPM(fan.index,
+                                    rpm: fan.maxRPM * pctAtTemp / 100) { _, _ in }
+                            }
+                        }
+                    } else {
+                        // 已知 WMNB 通道不可用：直接走 SMC，不再反复探测
+                        helper.setFanManual(fan.index, manual: true) { _, _ in }
+                        helper.setFanTargetRPM(fan.index,
+                            rpm: fan.maxRPM * pctAtTemp / 100) { _, _ in }
+                    }
+                    lastCurveHash[fan.index] = packed.hash
+                }
                 lastManualState[fan.index] = true
-                msgs.append(String(format: "%@：曲线 %.0f%@→%.0f%%",
-                                   role.rawValue, t, ctrl.tempSource.unit, pct))
+                helper.keepFanAlive(fan.index) { _, _ in }
+                if let lim = limitRPM {
+                    msgs.append(String(format: "%@：曲线接管 (%.0f%% ≤%.0fRPM)",
+                                       role.rawValue, pctAtTemp, lim))
+                } else {
+                    msgs.append(String(format: "%@：曲线接管 (%.0f%@ 约 %.0f%%)",
+                                       role.rawValue, t, ctrl.tempSource.unit, ctrl.curve.percent(at: t)))
+                }
 
             case .manual:
-                let rpm = fan.maxRPM * ctrl.manualPercent / 100
-                helper.setFanTargetRPM(fan.index, rpm: rpm) { _, _ in }
+                // 固定转速：做成「全平曲线」走 WMNB（与曲线模式统一通道）
+                let (capDuty, limitRPM) = rpmCap(for: ctrl, role: role, maxRPM: fan.maxRPM)
+                let target: Double = (capDuty != nil) ? min(ctrl.manualPercent, capDuty!) : ctrl.manualPercent
+                let flat = flatCurve(target, base: ctrl.curve)
+                let packed = packCurve(flat)
+                if lastCurveHash[fan.index] != packed.hash {
+                    if wmnbAvailable {
+                        helper.setFanCurve(fan.index, devid: devid,
+                                           a1: packed.a1, a2: packed.a2,
+                                           a3: packed.a3, a4: packed.a4) { [weak self] ok, _ in
+                            guard let self else { return }
+                            if ok {
+                                self.wmnbAvailable = true
+                            } else {
+                                self.wmnbAvailable = false
+                                self.helper.setFanManual(fan.index, manual: true) { _, _ in }
+                                self.helper.setFanTargetRPM(fan.index,
+                                    rpm: fan.maxRPM * target / 100) { _, _ in }
+                            }
+                        }
+                    } else {
+                        // 已知 WMNB 通道不可用：直接走 SMC，不再反复探测
+                        helper.setFanManual(fan.index, manual: true) { _, _ in }
+                        helper.setFanTargetRPM(fan.index,
+                            rpm: fan.maxRPM * target / 100) { _, _ in }
+                    }
+                    lastCurveHash[fan.index] = packed.hash
+                }
                 lastManualState[fan.index] = true
-                msgs.append(String(format: "%@：固定 %.0f%%", role.rawValue, ctrl.manualPercent))
+                helper.keepFanAlive(fan.index) { _, _ in }
+                if let lim = limitRPM {
+                    msgs.append(String(format: "%@：固定 %.0f%% (≤%.0fRPM)", role.rawValue, target, lim))
+                } else {
+                    msgs.append(String(format: "%@：固定 %.0f%%", role.rawValue, ctrl.manualPercent))
+                }
             }
         }
         lastApplyMessage = msgs.joined(separator: "   ·   ")
     }
 
+    /// 把 8 点曲线打包成 asus-wmi 的 4 个 DWORD（温度 / 占空比各 4 字节）。
+    /// 占空比按固件原生 0–255 缩放：byte = round(percent * 255 / 100)（与华硕 PWM 接口一致）。
+    private struct PackedCurve { let a1, a2, a3, a4: UInt32; let hash: Int }
+
+    private func packCurve(_ curve: FanCurve) -> PackedCurve {
+        let sorted = curve.points.sorted { $0.temperature < $1.temperature }
+        var temps: [UInt8] = [], duties: [UInt8] = []
+        for p in sorted.prefix(8) {
+            // 温度按 °C 直接取整（0–255 字节足够）
+            let t = UInt8(min(255, max(0, Int(p.temperature.rounded()))))
+            // ⚠️ 占空比是固件风扇曲线约定：0–100 百分比，不是 0–255（与华硕原始 PWM 不同）。
+            // 实测本机出厂曲线占空比即 [1…90]%，写 255 制会被固件夹到满速。
+            let d = UInt8(min(100, max(0, Int(p.percent.rounded()))))
+            temps.append(t); duties.append(d)
+        }
+        while temps.count < 8 { temps.append(0); duties.append(0) }
+        let pack: (UInt8, UInt8, UInt8, UInt8) -> UInt32 = { b0, b1, b2, b3 in
+            UInt32(b0) | (UInt32(b1) << 8) | (UInt32(b2) << 16) | (UInt32(b3) << 24)
+        }
+        let a1 = pack(temps[0], temps[1], temps[2], temps[3])
+        let a2 = pack(temps[4], temps[5], temps[6], temps[7])
+        let a3 = pack(duties[0], duties[1], duties[2], duties[3])
+        let a4 = pack(duties[4], duties[5], duties[6], duties[7])
+        let hash = Int(a1) ^ (Int(a2) &* 31) ^ (Int(a3) &* 17) ^ (Int(a4) &* 7)
+        return PackedCurve(a1: a1, a2: a2, a3: a3, a4: a4, hash: hash)
+    }
+
+    /// 用 base 曲线的温度点、平铺成固定占空比的曲线（固定转速模式走 WMNB）
+    private func flatCurve(_ percent: Double, base: FanCurve) -> FanCurve {
+        var c = base
+        c.points = base.points.map { CurvePoint(temperature: $0.temperature, percent: percent) }
+        c.floorPercent = percent
+        return c
+    }
+
+    /// 限制最高转速：开启时按 SMC 额定 maxRPM(F{i}Mx) 把 RPM 上限换算成占空比封顶。
+    /// 返回 (占空比上限?, 转速上限?)；未开启或拿不到 maxRPM 时返回 (nil, nil)。
+    /// 默认上限（rpmLimit 未填时）：CPU 7500 / GPU 7000。换算用线性估算（100% 占空比≈额定 maxRPM），
+    /// 并留 3% 余量确保实际转速不突破上限。
+    private func rpmCap(for ctrl: FanControl, role: FanRole, maxRPM: Double) -> (Double?, Double?) {
+        guard ctrl.rpmLimitEnabled, maxRPM > 0 else { return (nil, nil) }
+        let limit = ctrl.rpmLimit > 0 ? ctrl.rpmLimit : (role == .cpu ? 7500 : 7000)
+        let duty = min(100, max(0, limit / maxRPM * 100 * 0.97))
+        return (duty, limit)
+    }
+
     func releaseFans() {
         for f in fans {
-            helper.setFanManual(f.index, manual: false) { _, _ in }
+            helper.releaseFanCurve(f.index) { _, _ in }
             lastManualState[f.index] = false
+            lastCurveHash[f.index] = nil
         }
         lastApplyMessage = "已交回固件自动控制"
     }

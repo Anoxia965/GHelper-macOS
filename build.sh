@@ -54,7 +54,13 @@ COPYFILE_DISABLE=1 cp -R Kexts "$CONTENTS/Resources/Kexts" 2>/dev/null || echo "
 # 灯光：rgbctl 用户态工具（放 MacOS，安装时拷到 /usr/local/bin）+ GHRGB.kext（放 Resources，安装时拷到 /Library/Extensions）
 cp "$BUILD/rgbctl" "$CONTENTS/MacOS/rgbctl" 2>/dev/null || echo "  （警告：未编译 rgbctl）"
 chmod +x "$CONTENTS/MacOS/$APP_NAME" "$CONTENTS/MacOS/GHelperHelper" "$CONTENTS/MacOS/rgbctl"
-COPYFILE_DISABLE=1 cp -R RGB/kext/GHRGB.kext "$CONTENTS/Resources/GHRGB.kext" 2>/dev/null || echo "  （警告：未找到 GHRGB.kext）"
+# 灯光 kext：优先本次编译产物 Build/GHRGB.kext（含通用 WMNB 选择器），其次仓库预编译 RGB/kext/GHRGB.kext
+if [ -d "$BUILD/GHRGB.kext" ]; then
+  COPYFILE_DISABLE=1 cp -R "$BUILD/GHRGB.kext" "$CONTENTS/Resources/GHRGB.kext"
+  echo "▸ 打包 GHRGB.kext（Build 编译产物，含 WMNB 通用通道）"
+else
+  COPYFILE_DISABLE=1 cp -R RGB/kext/GHRGB.kext "$CONTENTS/Resources/GHRGB.kext" 2>/dev/null || echo "  （警告：未找到 GHRGB.kext）"
+fi
 
 echo "▸ 签名（ad-hoc）…"
 codesign --force --deep --sign - "$APPDIR" 2>/dev/null || \
