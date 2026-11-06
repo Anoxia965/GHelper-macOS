@@ -175,6 +175,15 @@ final class HelperService: NSObject, HelperProtocol {
         reply("助手运行中 · euid=\(euid) · 风扇 \(count) 把")
     }
 
+    func helperVersion(reply: @escaping (String) -> Void) {
+        let path = "/Library/PrivilegedHelperTools/.ghelper-helper-version"
+        if let s = try? String(contentsOfFile: path, encoding: .utf8) {
+            reply(s.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            reply("0")
+        }
+    }
+
     func setFanManual(_ index: Int, manual: Bool, reply: @escaping (Bool, String) -> Void) {
         touch()
         do {

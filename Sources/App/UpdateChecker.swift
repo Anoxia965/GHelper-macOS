@@ -274,7 +274,7 @@ final class UpdateInstaller: ObservableObject {
                 for d in tempDirs { Self.unmountOrRemove(d) }
                 try? FileManager.default.removeItem(at: pkg)
 
-                phase = .done("已更新到 \(release.tagName)。旧安装已移到废纸篓。请点「安装/重装」更新助手。")
+                phase = .done("已更新到 \(release.tagName)。旧安装已移到废纸篓。助手将在下次启动时自动同步（或点「设置 ▸ 安装/重装」）。")
 
                 if relaunch {
                     phase = .done("已更新到 \(release.tagName)，正在重启…")

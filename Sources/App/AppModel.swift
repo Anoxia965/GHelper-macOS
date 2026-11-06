@@ -7,6 +7,16 @@ import SwiftUI
 import Combine
 import AppKit
 
+// MARK: - 风扇能力档案（首次测绘后持久化，用于限速/稳态判定，避免写死本机转速）
+/// 不同 AMD 黑苹果额定/实测满速各不相同，故首次安装后自动测绘并保存，
+/// 之后限速默认值、强冷稳态判定、UI 显示都基于实测值，而不是硬编码 7300/7500 等。
+struct FanProfile: Codable {
+    var idleRPM: Double = 0          // 固件自动、低温下的空闲转速
+    var measuredMaxRPM: Double = 0   // 拉满 WMNB 100% 后的稳态实测满速（真正可控上限）
+    var ratedMaxRPM: Double = 0      // SMC F{i}Mx 额定（测绘时记录，仅供参考）
+    var probedAt: Date = Date()
+}
+
 @MainActor
 final class AppModel: ObservableObject, RGBBackend {
 
@@ -67,6 +77,14 @@ final class AppModel: ObservableObject, RGBBackend {
 
     /// 睿频开关的即时反馈（成功/失败都显示，解决「点了没反应」看不到结果的问题）
     @Published var boostStatus: String = ""
+
+    /// 风扇能力档案（按物理索引）。首次测绘后填入，用于限速默认值与强冷稳态判定。
+    @Published var fanProfiles: [Int: FanProfile] = [:] {
+        didSet { saveProfiles() }
+    }
+    @Published var isProbingFans: Bool = false
+    @Published var probingMessage: String = ""
+    private var idleSnapshot: [Int: Double] = [:]
 
     // MARK: 键盘灯光（Aura USB）
 
@@ -188,7 +206,10 @@ final class AppModel: ObservableObject, RGBBackend {
         // 否则 auraAvailable 一直是 false → 灯光按钮灰掉、点不动（“控制没反应”）。
         helper.$isInstalled
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshAura() }
+            .sink { [weak self] _ in
+                self?.refreshAura()
+                self?.scheduleProbeIfNeeded()
+            }
             .store(in: &cancellables)
 
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -273,6 +294,10 @@ final class AppModel: ObservableObject, RGBBackend {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.applyBoostOnLaunch()
         }
+        loadProfiles()
+        // 首次启动（无档案）且助手就绪时，自动测绘一次风扇能力，用于后续限速/稳态判定。
+        // 用 scheduleProbeIfNeeded：条件未就绪会自动重试，避免一次性竞态导致永久跳过。
+        scheduleProbeIfNeeded()
     }
 
     // MARK: 睿频模式
@@ -670,13 +695,157 @@ final class AppModel: ObservableObject, RGBBackend {
 
     /// 限制最高转速：开启时按 SMC 额定 maxRPM(F{i}Mx) 把 RPM 上限换算成占空比封顶。
     /// 返回 (占空比上限?, 转速上限?)；未开启或拿不到 maxRPM 时返回 (nil, nil)。
-    /// 默认上限（rpmLimit 未填时）：CPU 7500 / GPU 7000。换算用线性估算（100% 占空比≈额定 maxRPM），
-    /// 并留 3% 余量确保实际转速不突破上限。
+    /// 限速默认值（用户开了「限制最高转速」但未手填）：优先本机实测满速；
+    /// 读不到实测则退回额定 80%，再不行用通用兜底 7500/7000。
+    func defaultRpmLimit(for role: FanRole) -> Double {
+        let idx = role == .cpu ? 0 : 1
+        if let p = fanProfiles[idx], p.measuredMaxRPM > 0 {
+            return p.measuredMaxRPM            // 实测满速即真正上限，封顶≈不限制（与原 7500 语义一致）
+        }
+        let maxRPM = fans.first { FanRole.from(index: $0.index) == role }?.maxRPM ?? 0
+        return maxRPM > 0 ? maxRPM * 0.8 : (role == .cpu ? 7500 : 7000)
+    }
+
+    /// 限制最高转速：开启时把实际转速压在 rpmLimit 以下（按 SMC 额定 maxRPM 换算成占空比封顶）。
+    /// 返回 (占空比上限?, 转速上限?)；未开启或拿不到 maxRPM 时返回 (nil, nil)。
     private func rpmCap(for ctrl: FanControl, role: FanRole, maxRPM: Double) -> (Double?, Double?) {
         guard ctrl.rpmLimitEnabled, maxRPM > 0 else { return (nil, nil) }
-        let limit = ctrl.rpmLimit > 0 ? ctrl.rpmLimit : (role == .cpu ? 7500 : 7000)
+        let limit = ctrl.rpmLimit > 0 ? ctrl.rpmLimit : defaultRpmLimit(for: role)
         let duty = min(100, max(0, limit / maxRPM * 100 * 0.97))
         return (duty, limit)
+    }
+
+    // MARK: 风扇能力测绘（首次自动，结果持久化用于限速/稳态判定）
+
+    /// 自动触发：助手已装且版本匹配、无档案、有风扇时测绘一次。
+    /// 首次测绘的可靠触发：条件（助手就绪 + 风扇列表已填充）满足才跑，
+    /// 否则每 5 秒重试（最多 12 次 ≈ 60s），避免一次性 4s 竞态导致永久跳过。
+    private var probeRetryCount = 0
+    func scheduleProbeIfNeeded() {
+        guard fanProfiles.isEmpty, !isProbingFans else { return }
+        maybeAutoProbe()
+        if fanProfiles.isEmpty, probeRetryCount < 12 {
+            probeRetryCount += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                self?.scheduleProbeIfNeeded()
+            }
+        }
+    }
+
+    func maybeAutoProbe() {
+        guard fanProfiles.isEmpty else { return }
+        guard helper.isInstalled, !helper.helperOutdated else { return }
+        guard !fans.isEmpty else { return }
+        probeFans()
+    }
+
+    /// 测绘每台风扇：先交回固件自动采集空闲转速，再拉满 WMNB 100% 直到稳态，
+    /// 记录实测满速与额定，持久化。测绘后交回固件自动（看门狗兜底）。
+    /// 兼容性：部分机型（如本机 GPU 风扇）手动/曲线接管即停转，命令 100% 却读到 0；
+    /// 此时提前释放该扇并兜底用额定值，既不让风扇长时间停转，也给限速一个合理上限。
+    func probeFans() {
+        guard helper.isInstalled, !fans.isEmpty else { return }
+        guard !isProbingFans else { return }
+        isProbingFans = true
+        probingMessage = "正在测绘风扇转速…"
+        Task {
+            // 1) 交回固件自动，采集真实空闲转速
+            for f in fans { helper.releaseFanCurve(f.index) { _, _ in } }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            let idleNow = readFans(smc: smc)
+            var idle: [Int: Double] = [:]
+            for f in idleNow { idle[f.index] = f.actualRPM }
+
+            // 2) 双扇同时拉满
+            for f in fans {
+                let devid: UInt32 = (FanRole.from(index: f.index) == .cpu) ? Self.wmnbDevidCPU : Self.wmnbDevidGPU
+                let packed = self.packCurve(self.flatCurve(100, base: .default(for: .gpu)))
+                helper.setFanCurve(f.index, devid: devid,
+                                  a1: packed.a1, a2: packed.a2, a3: packed.a3, a4: packed.a4) { _, _ in }
+                helper.keepFanAlive(f.index) { _, _ in }
+            }
+
+            // 3) 轮询稳态（每扇独立判定；停转的扇提前释放并记额定值）
+            var stableCount: [Int: Int] = [:]
+            var lastRPM: [Int: Double] = [:]
+            var zeroCount: [Int: Int] = [:]
+            var released: Set<Int> = []
+            let deadline = Date().addingTimeInterval(90)
+            while Date() < deadline {
+                guard !Task.isCancelled else { break }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let now = readFans(smc: smc)
+                var allStable = true
+                for f in fans {
+                    if released.contains(f.index) { continue }
+                    let rpm = now.first(where: { $0.index == f.index })?.actualRPM ?? 0
+                    // 命令 100% 却读到 ~0：判定为「手动接管即停转」，提前释放并记额定值
+                    if rpm == 0 || rpm <= (idle[f.index] ?? 0) * 0.5 {
+                        zeroCount[f.index] = (zeroCount[f.index] ?? 0) + 1
+                        if (zeroCount[f.index] ?? 0) >= 3 {
+                            helper.releaseFanCurve(f.index) { _, _ in }
+                            released.insert(f.index)
+                            lastRPM[f.index] = f.maxRPM > 0 ? f.maxRPM : (idle[f.index] ?? 0)
+                            continue
+                        }
+                    } else {
+                        zeroCount[f.index] = 0
+                    }
+                    let cap0 = (fanProfiles[f.index]?.measuredMaxRPM ?? 0) > 0
+                        ? fanProfiles[f.index]!.measuredMaxRPM : (f.maxRPM > 0 ? f.maxRPM : rpm)
+                    let line = max(8.0, 0.003 * cap0)
+                    if let last = lastRPM[f.index], abs(rpm - last) > line {
+                        stableCount[f.index] = 0
+                        allStable = false
+                    } else {
+                        stableCount[f.index] = (stableCount[f.index] ?? 0) + 1
+                    }
+                    lastRPM[f.index] = rpm
+                    if (stableCount[f.index] ?? 0) < 5 { allStable = false }
+                }
+                self.probingMessage = "正在测绘风扇转速… 已稳定 \(stableCount.values.min() ?? 0)/5"
+                if allStable { break }
+            }
+
+            // 4) 记录档案并交回固件自动
+            var profiles = self.fanProfiles
+            let final = readFans(smc: smc)
+            for f in fans {
+                let measured = lastRPM[f.index]
+                    ?? (final.first(where: { $0.index == f.index })?.actualRPM ?? 0)
+                // 实测值不可信（≤空闲）时兜底用额定值，保证限速上限合理
+                let safe = (measured > (idle[f.index] ?? 0)) ? measured
+                    : (f.maxRPM > 0 ? f.maxRPM : (idle[f.index] ?? 0))
+                profiles[f.index] = FanProfile(
+                    idleRPM: idle[f.index] ?? 0,
+                    measuredMaxRPM: safe,
+                    ratedMaxRPM: f.maxRPM,
+                    probedAt: Date())
+                if !released.contains(f.index) {
+                    helper.releaseFanCurve(f.index) { _, _ in }
+                }
+            }
+            self.fanProfiles = profiles
+            self.isProbingFans = false
+            let cpu = profiles[0].map { "CPU 满速 \(Int($0.measuredMaxRPM))" } ?? ""
+            let gpu = profiles[1].map { "GPU 满速 \(Int($0.measuredMaxRPM))" } ?? ""
+            self.probingMessage = "风扇测绘完成（\(cpu) · \(gpu) RPM）已用于限速与强冷判定"
+        }
+    }
+
+    private func loadProfiles() {
+        guard let data = UserDefaults.standard.data(forKey: "fanProfiles"),
+              let d = try? JSONDecoder().decode([String: FanProfile].self, from: data) else { return }
+        var m: [Int: FanProfile] = [:]
+        for (k, v) in d { if let i = Int(k) { m[i] = v } }
+        fanProfiles = m
+    }
+
+    private func saveProfiles() {
+        let d = fanProfiles.reduce(into: [String: FanProfile]()) { $0[String($1.key)] = $1.value }
+        if let data = try? JSONEncoder().encode(d) {
+            UserDefaults.standard.set(data, forKey: "fanProfiles")
+        }
     }
 
     func releaseFans() {
@@ -725,16 +894,19 @@ final class AppModel: ObservableObject, RGBBackend {
         guard turboRampingState[role] == true else { return }
         let fan = fans.first { FanRole.from(index: $0.index) == role }
         let actual = fan?.actualRPM ?? 0
-        let maxRPM = fan?.maxRPM ?? 0
+        let ratedMax = fan?.maxRPM ?? 0
+        // 稳态判定优先用「本机实测满速」（档案）：本机 CPU 额定 7800 但实测仅 ~7300，
+        // 用额定会提前误判满速；读不到实测才退回额定。
+        let measured = fan.flatMap { fanProfiles[$0.index]?.measuredMaxRPM } ?? 0
+        let cap = measured > 0 ? measured : ratedMax
         let last = turboLastRPM[role] ?? 0
         // 爬升判定线：本扇转速仍在明显上涨（超过该线）即视为「还在爬升」，绝不能算稳态。
-        // 取绝对 8 RPM 与相对 0.3% 额定二者的较大值，把慢速爬升（每秒仍涨几十 RPM）排除在稳态之外。
-        let climbLine = max(8.0, 0.003 * maxRPM)
+        // 取绝对 8 RPM 与相对 0.3% 上限二者的较大值，把慢速爬升（每秒仍涨几十 RPM）排除在稳态之外。
+        let climbLine = max(8.0, 0.003 * (cap > 0 ? cap : ratedMax))
         let stillClimbing = actual > last + climbLine
-        // 稳态 = 已接近额定顶速（≥85%）且基本不再爬升。
-        // 只达到百分比、但仍在明显爬升时绝不算稳态（否则半路提前计时、满速还没冲到就回落）。
-        // 风扇冲到各自顶速（CPU 实测约 7300 / GPU 实测约 7500，均经 WMNB 100% 占空比）后会自然停爬，那一刻才判稳态。
-        let steady = maxRPM > 0 && actual >= 0.85 * maxRPM && !stillClimbing
+        // 稳态 = 已接近顶速（≥85%）且基本不再爬升。只达到百分比但仍在明显爬升时绝不算稳态。
+        // 风扇冲到各自顶速（取本机实测满速）后会自然停爬，那一刻才判稳态。
+        let steady = cap > 0 && actual >= 0.85 * cap && !stillClimbing
         if steady {
             turboSteadyCount[role] = (turboSteadyCount[role] ?? 0) + 1
         } else {

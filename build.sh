@@ -12,12 +12,16 @@ CONTENTS="$APPDIR/Contents"
 
 SRC_SHARED="Sources/Shared/SMC.swift Sources/Shared/HelperProtocol.swift Sources/Shared/Sensors.swift Sources/Shared/Shell.swift Sources/Shared/CoreMonitor.swift Sources/Shared/AuraController.swift"
 
+# 兼容性：AMD 黑苹果均为 x86_64；明确指定部署目标 13.0（Ventura），
+# 否则 swiftc 默认按本机 SDK（macOS 26）锁定最低版本，Sequoia(15) 及以下会打不开。
+DEPLOY="-target x86_64-apple-macosx13.0"
+
 echo "▸ 编译特权助手…"
-swiftc -O $SRC_SHARED Sources/Helper/main.swift \
+swiftc -O $DEPLOY $SRC_SHARED Sources/Helper/main.swift \
        -o "$BUILD/GHelperHelper"
 
 echo "▸ 编译主程序…"
-swiftc -O $SRC_SHARED Sources/App/FanCurve.swift \
+swiftc -O $DEPLOY $SRC_SHARED Sources/App/FanCurve.swift \
        Sources/App/HelperClient.swift \
        Sources/App/UpdateChecker.swift \
        Sources/App/AppModel.swift \
@@ -29,7 +33,7 @@ swiftc -O $SRC_SHARED Sources/App/FanCurve.swift \
        -o "$BUILD/GHelperBin"
 
 echo "▸ 编译 rgbctl（灯光用户态工具，随 App 分发，安装时拷到 /usr/local/bin）…"
-clang -framework IOKit -framework CoreFoundation \
+clang $DEPLOY -framework IOKit -framework CoreFoundation \
       RGB/kext/rgbctl.c -o "$BUILD/rgbctl" || \
     echo "  （rgbctl 编译失败）"
 

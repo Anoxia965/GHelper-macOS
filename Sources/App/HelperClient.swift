@@ -52,6 +52,13 @@ final class HelperClient: ObservableObject {
     @Published var statusText = "未连接"
     @Published var lastError: String?
 
+    /// 助手自报版本（install 时写入 /Library/PrivilegedHelperTools/.ghelper-helper-version）
+    @Published var helperVersion: String = ""
+    /// 助手版本是否与当前 App 版本匹配（不匹配则应在合适时机重装，消除「更新后功能静默失效」）
+    @Published var helperOutdated: Bool = false
+    /// 安装过程中的提示（如 kext 需批准+重启），供 UI 展示
+    @Published var installMessage: String? = nil
+
     // 睿频前置：debug=0x144
     @Published var ocBootArgStatus: OCBootArgStatus = .unknown
     @Published var ocBootArgMessage: String = ""
@@ -89,6 +96,7 @@ final class HelperClient: ObservableObject {
             Task { @MainActor in
                 self?.isInstalled = true
                 self?.statusText = info
+                self?.probeHelperVersion()
             }
         }
     }
@@ -193,10 +201,17 @@ final class HelperClient: ObservableObject {
 
     /// 用 osascript 弹系统密码框，一次性把助手装进去
     func install() {
-        guard let helper = Bundle.main.path(forAuxiliaryExecutable: "GHelperHelper") else {
-            lastError = "在 App 包内找不到 GHelperHelper"
+        // 显式拼 App 包内路径，不依赖 Info.plist 的 SMAuxiliaryExecutables 声明
+        // （当前 Info.plist 未声明该键，forAuxiliaryExecutable 可能返回 nil 导致安装失败）
+        let helperURL = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("GHelperHelper")
+        guard let helper = helperURL?.path,
+              FileManager.default.isExecutableFile(atPath: helper) else {
+            lastError = "在 App 包内找不到 GHelperHelper（应为 Contents/MacOS/GHelperHelper）"
             return
         }
+        let appVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0"
 
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -232,8 +247,13 @@ final class HelperClient: ObservableObject {
           rm -rf /Library/Extensions/GHRGB.kext
           cp -R "$KEXT_SRC" /Library/Extensions/GHRGB.kext
           chown -R root:wheel /Library/Extensions/GHRGB.kext
-          kmutil load -p /Library/Extensions/GHRGB.kext -z 2>/dev/null || true
-          echo "GHRGB kext installed (reboot may be required)"
+          KERR=$(mktemp /tmp/ghelper_kext.XXXXXX)
+          if kmutil load -p /Library/Extensions/GHRGB.kext -z 2>"$KERR"; then
+            echo "GHRGB kext loaded"
+          else
+            echo "KEXTMSG:GHRGB 未即时加载（正常现象）。请到『系统设置 ▸ 隐私与安全性』批准 GHRGB，再重启生效。详情: $(head -c 200 "$KERR" | tr '\n' ' ')"
+          fi
+          rm -f "$KERR"
         fi
         cat > '\(kHelperPlistPath)' <<'PLISTEOF'
         \(plist)
@@ -242,13 +262,16 @@ final class HelperClient: ObservableObject {
         chmod 644 '\(kHelperPlistPath)'
         launchctl bootout system/\(kHelperMachServiceName) 2>/dev/null || launchctl unload -w '\(kHelperPlistPath)' 2>/dev/null
         launchctl bootstrap system '\(kHelperPlistPath)' 2>/dev/null || launchctl load -w '\(kHelperPlistPath)'
+        # 记录助手版本，供 App 判断是否需要重装（与当前 App 版本比对）
+        echo '\(appVersion)' > /Library/PrivilegedHelperTools/.ghelper-helper-version
+        echo "helper-version:\(appVersion)"
         # 装 zenmaster 到固定路径 venv（助手在 LaunchDaemon 最小环境下也能找到，且不受系统 python 版本影响）
         VENV=/Library/PrivilegedHelperTools/zenmaster-venv
         VPY="$VENV/bin/python3"
         if [ ! -x "$VPY" ] || ! "$VPY" -c "import zenmaster" 2>/dev/null; then
           BASE=""
-          for cand in /Users/anoxia-m/.workbuddy/binaries/python/versions/3.13.12/bin/python3 \
-                      /usr/local/bin/python3 /usr/bin/python3 python3; do
+          for cand in /usr/local/bin/python3 /usr/bin/python3 python3 \
+                      /Users/anoxia-m/.workbuddy/binaries/python/versions/3.13.12/bin/python3; do
             if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys;sys.exit(0 if sys.version_info>=(3,10) else 1)" 2>/dev/null; then
               BASE="$cand"; break
             fi
@@ -294,6 +317,9 @@ final class HelperClient: ObservableObject {
         runAdminScript(script) { [weak self] ok, out in
             Task { @MainActor in
                 self?.lastError = ok ? nil : out
+                if let m = out.split(separator: "\n").first(where: { $0.hasPrefix("KEXTMSG:") }) {
+                    self?.installMessage = String(m.dropFirst("KEXTMSG:".count))
+                }
                 self?.refreshStatus()
                 // 解析 boot-args 检测结果；缺参数则弹窗确认后配置
                 if out.contains("BOOTARG:OK") {
@@ -305,6 +331,48 @@ final class HelperClient: ObservableObject {
                     self?.ocBootArgStatus = .noOC
                 }
             }
+        }
+    }
+
+    // MARK: 助手版本探测与自动重装
+
+    /// ping 成功后用独立连接探测助手自报版本。旧版助手不支持 helperVersion 方法时调用会超时，
+    /// 据此判定为「版本过旧需重装」——从而一键更新 App 后也能自愈，不再静默失效。
+    /// 版本不符则延迟自动重装（弹一次密码框）；用户取消则由 UI 提示手动点「安装/重装」。
+    private func probeHelperVersion() {
+        let expected = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0"
+        let probe = NSXPCConnection(machServiceName: kHelperMachServiceName, options: .privileged)
+        probe.remoteObjectInterface = NSXPCInterface(with: HelperProtocol.self)
+        probe.resume()
+        var got = false
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, !got else { return }
+            probe.invalidate()
+            self.helperVersion = "legacy"
+            self.helperOutdated = true
+            self.scheduleAutoReinstall()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timeout)
+        (probe.remoteObjectProxy as? HelperProtocol)?.helperVersion { [weak self] v in
+            got = true
+            timeout.cancel()
+            probe.invalidate()
+            Task { @MainActor in
+                guard let self else { return }
+                self.helperVersion = v
+                self.helperOutdated = (v != expected)
+                if self.helperOutdated { self.scheduleAutoReinstall() }
+            }
+        }
+    }
+
+    private var autoReinstallTriggered = false
+    /// 助手版本过旧时延迟触发一次重装（弹密码框）。进程内只触发一次，避免重复弹窗。
+    private func scheduleAutoReinstall() {
+        guard !autoReinstallTriggered else { return }
+        autoReinstallTriggered = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.install()
         }
     }
 

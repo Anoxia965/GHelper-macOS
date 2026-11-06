@@ -1,15 +1,22 @@
 #!/bin/bash
 #
-#  install_now.sh —— 把本次编译的新 GHelper 部署进系统（App + root 助手 + rgbctl + GHRGB.kext）
+#  install_now.sh —— 仅开发者本地部署用：把本次编译的新 GHelper 装进本机系统
+#  （App + root 助手 + rgbctl + GHRGB.kext）。普通用户请勿直接用此脚本，
+#  请用 App 内「设置 ▸ 安装/重装」（从 App 自身 bundle 取资源，对任意机器通用）。
 #  由 osascript with administrator privileges 触发（以 root 运行）。
 #  保守策略：旧的 App / 助手 / kext 全部「移到备份（废纸篓 / 带时间戳目录）」，不删除。
 #
 set -e
 
-SRC_APP="/Users/anoxia-m/WorkBuddy/重写Ghelp/Build/GHelper.app"
+# 当前登录用户（用于废纸篓路径与重启主程序），避免写死用户名
+LOGUSER="${SUDO_USER:-$(stat -f '%Su' /dev/console 2>/dev/null || echo "$USER")}"
+# 源 App 默认取仓库 Build 目录；可通过第一个参数覆盖（适配其他构建路径）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SRC_APP="${1:-$SCRIPT_DIR/Build/GHelper.app}"
 SRC_HELPER="$SRC_APP/Contents/MacOS/GHelperHelper"
 SRC_RGBCTL="$SRC_APP/Contents/MacOS/rgbctl"
 SRC_KEXT="$SRC_APP/Contents/Resources/GHRGB.kext"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SRC_APP/Contents/Info.plist" 2>/dev/null || echo "0")"
 
 DST_APP="/Applications/GHelper.app"
 DST_HELPER="/Library/PrivilegedHelperTools/cn.anoxia.GHelper.helper"
@@ -50,6 +57,8 @@ fi
 cp "$SRC_HELPER" "$DST_HELPER"
 chown root:wheel "$DST_HELPER"
 chmod 755 "$DST_HELPER"
+# 记录助手版本，供 App 判断是否需要重装（与安装它的 App 版本比对）
+echo "$VERSION" > /Library/PrivilegedHelperTools/.ghelper-helper-version
 
 # ---- 4. rgbctl ----
 echo "[install] 安装 rgbctl → $DST_RGBCTL"

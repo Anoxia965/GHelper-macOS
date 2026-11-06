@@ -24,6 +24,16 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if model.helper.helperOutdated {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text("特权助手版本过旧，点「设置 ▸ 安装/重装」更新后将自动生效。")
+                        .font(.system(size: 11)).foregroundStyle(.orange)
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.orange.opacity(0.12))
+            }
             header
             tabBar
             Divider()
@@ -419,7 +429,7 @@ struct FanView: View {
                     }
                     Spacer()
                 }
-                Text("两把扇同时拉满，互相等到都到达各自软件可控顶速（CPU 额定 7800 / 实测约 7300；GPU 额定 7600 / 实测约 7500）后，一起保持 30 秒再回落（限速开启时停于限制值）。")
+                Text("两把扇同时拉满，互相等到都到达各自软件可控顶速（由本机实测满速决定，首次会自动测绘）后，一起保持 30 秒再回落（限速开启时停于限制值）。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
@@ -493,7 +503,7 @@ struct FanControlCard: View {
                     }
                     .buttonStyle(.bordered).tint(.orange)
                 }
-                Text("立即冲到各自软件可控顶速（CPU 额定 7800 / 实测约 7300；GPU 额定 7600 / 实测约 7500），到达顶速后保持 30 秒再回落到限速值 / 正常模式")
+                Text("立即冲到各自软件可控顶速（取本机实测满速，首次自动测绘），到达顶速后保持 30 秒再回落到限速值 / 正常模式")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
@@ -536,7 +546,7 @@ struct FanControlCard: View {
                         get: { model.controls[role]?.rpmLimitEnabled ?? false },
                         set: { on in
                             var c = model.controls[role] ?? FanControl()
-                            if on, c.rpmLimit == 0 { c.rpmLimit = (role == .cpu ? 7500 : 7000) }
+                            if on, c.rpmLimit == 0 { c.rpmLimit = model.defaultRpmLimit(for: role) }
                             c.rpmLimitEnabled = on
                             model.controls[role] = c
                         }))
@@ -550,7 +560,7 @@ struct FanControlCard: View {
                     }
                 }
                 if control.rpmLimitEnabled {
-                    let lim = control.rpmLimit > 0 ? control.rpmLimit : (role == .cpu ? 7500 : 7000)
+                    let lim = control.rpmLimit > 0 ? control.rpmLimit : model.defaultRpmLimit(for: role)
                     let maxRPM = model.fans.first { FanRole.from(index: $0.index) == role }?.maxRPM ?? 0
                     Text(String(format: "封顶 %.0f RPM（额定 %.0f）", lim, maxRPM))
                         .font(.system(size: 10)).foregroundStyle(.secondary)
@@ -616,13 +626,12 @@ enum AsusFanLimits {
         + "GHRGB kext 未加载或 rgbctl 缺失时自动退回 SMC 通道。"
         + "曲线 8 点打包为 asus-wmi 格式，占空比按固件风扇曲线约定 0–100 百分比"
         + "（实测出厂曲线占空比即 1–90%；切忌按 0–255 写，会被固件夹到满速）。"
-                    + "实测最高转速：CPU 风扇空闲~3200、100% 占空比稳态≈7300（F0Mx=7800 额定，软件可控上限）；"
-                    + "GPU 风扇空闲~2100、100% 占空比≈7500（F1Mx=7600 额定，软件可控上限；此前 SMC 手动会停转）。"
+        + "实测最高转速由本机首次自动测绘得到（各机型额定/满速不同），可在「设置 ▸ 重新测绘风扇」刷新。"
         + "风扇爬升很慢，改完设定要等约 30–45 秒才到稳态，别以为没生效。"
         + "拿不到有效温度读数时一律交回固件自动，绝不把风扇停在低转速。"
-        + "「限制最高转速」开关可把转速压在额定以下（默认 CPU 7500 / GPU 7000 RPM，可调）。"
+        + "「限制最高转速」开关可把转速压在额定以下（默认值取自本机实测满速，可在「设置」重新测绘）。"
         + "「强冷」按钮（每把扇各一个，另有「双扇强冷」一键双扇）会让风扇冲到各自软件可控顶速"
-        + "（CPU 7800 / GPU 7600，受 WMNB 限制实际约 7300 封顶），到达满速后再保持 30 秒才回落，限速开启时停于限制值（CPU 7500 / GPU 7000）。"
+        + "（取本机实测满速），到达满速后再保持 30 秒才回落，限速开启时停于限制值（默认实测满速）。"
 }
 
 // MARK: - 电池
@@ -829,10 +838,25 @@ struct SettingsView: View {
                 HStack {
                     Button("安装 / 重装") { model.helper.install() }
                         .buttonStyle(.borderedProminent).controlSize(.small)
+                        .tint(model.helper.helperOutdated ? .red : nil)
                     Button("卸载") { model.helper.uninstall() }
                         .controlSize(.small)
                     Button("刷新") { model.helper.refreshStatus() }
                         .controlSize(.small)
+                    Button(model.isProbingFans ? "测绘中…" : "重新测绘风扇") { model.probeFans() }
+                        .controlSize(.small)
+                        .disabled(model.isProbingFans || !model.helper.isInstalled)
+                }
+                if model.helper.helperOutdated {
+                    Text("助手版本过旧（已装 \(model.helper.helperVersion)，当前 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")）：点「安装 / 重装」更新后即可自动生效。")
+                        .font(.system(size: 10)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+                if !model.probingMessage.isEmpty {
+                    Text(model.probingMessage)
+                        .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if let km = model.helper.installMessage {
+                    Text(km).font(.system(size: 10)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -933,7 +957,7 @@ struct SettingsView: View {
             DashCard("开机启动") {
                 Toggle("登录时自动启动", isOn: $launchAtLogin)
                     .font(.system(size: 12))
-                    .onChange(of: launchAtLogin) { _, new in
+                    .onChange(of: launchAtLogin) { new in
                         model.helper.setLaunchAtLogin(new)
                     }
             }
