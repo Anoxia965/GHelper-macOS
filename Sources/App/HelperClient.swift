@@ -456,8 +456,8 @@ final class HelperClient: ObservableObject {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let dry = dryrun ? "1" : "0"
         return ocConfigCollector + """
-        CFGOUT=/private/tmp/ghelper-cfg-$$.txt
-        USOUT=/private/tmp/ghelper-us-$$.txt
+        export CFGOUT=/private/tmp/ghelper-cfg-$$.txt
+        export USOUT=/private/tmp/ghelper-us-$$.txt
         collect_oc_configs "$CFGOUT" "$USOUT"
         export BDIR="\(home)/Library/Application Support/GHelper/efi-backups"
         export DRYRUN="\(dry)"
