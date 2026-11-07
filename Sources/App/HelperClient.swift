@@ -64,6 +64,10 @@ final class HelperClient: ObservableObject {
     @Published var ocBootArgMessage: String = ""
     /// 安装完成后若检测到缺参数，置 true 由 UI 弹确认框
     @Published var bootArgPromptPending = false
+    /// 预览（DRYRUN）结果文本，确认弹窗展示
+    @Published var bootArgPreviewText: String = ""
+    /// 预览完成后置 true，弹「确认修改」框（二次确认，避免误操作损坏 EFI）
+    @Published var bootArgConfirmPending = false
 
     private var connection: NSXPCConnection?
 
@@ -284,34 +288,10 @@ final class HelperClient: ObservableObject {
         "$VPY" -m pip install --quiet zenmaster 2>/dev/null || true
         sleep 1
         echo installed
-        # 检测 OC boot-args 状态（root，可挂载 EFI，含 U 盘）——扫所有 OC，任意一份缺参数就提示
-        BO_ANY=0; BO_MISS=0
-        for vol in /Volumes/*/EFI/OC/config.plist; do
-          [ -f "$vol" ] || continue
-          BO_ANY=1
-          /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$vol" 2>/dev/null | grep -q 'debug=0x144' || BO_MISS=1
-        done
-        MP=/private/tmp/ghelper-efi-$$
-        mkdir -p "$MP"
-        for disk in $(diskutil list | awk '/EFI/{print $NF}'); do
-          diskutil mount "$disk" >/dev/null 2>&1
-          for vol in /Volumes/*/EFI/OC/config.plist; do
-            [ -f "$vol" ] || continue
-            BO_ANY=1
-            /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$vol" 2>/dev/null | grep -q 'debug=0x144' || BO_MISS=1
-          done
-          if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then
-            if [ -f "$MP/EFI/OC/config.plist" ]; then
-              BO_ANY=1
-              /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$MP/EFI/OC/config.plist" 2>/dev/null | grep -q 'debug=0x144' || BO_MISS=1
-            fi
-            umount "$MP" 2>/dev/null
-          fi
-        done
-        if [ "$BO_ANY" = 0 ]; then echo "BOOTARG:NO_OC"
-        elif [ "$BO_MISS" = 1 ]; then echo "BOOTARG:MISSING"
-        else echo "BOOTARG:OK"
-        fi
+        # 安装时自动配置「系统前置三件套」（debug=0x144 + AMFI 放行 + csr-active-config），
+        # 让 ad-hoc 签名的特权助手能在 macOS 15 严格 SIP/AMFI 下被 launchd 加载（风扇/灯光控制必需）。
+        # 复用统一写入脚本；已配置则跳过，缺则写入并备份，输出 SUMMARY 供 UI 解析。
+        \(efiWriteScript(dryrun: false))
         """
 
         runAdminScript(script) { [weak self] ok, out in
@@ -321,14 +301,29 @@ final class HelperClient: ObservableObject {
                     self?.installMessage = String(m.dropFirst("KEXTMSG:".count))
                 }
                 self?.refreshStatus()
-                // 解析 boot-args 检测结果；缺参数则弹窗确认后配置
-                if out.contains("BOOTARG:OK") {
-                    self?.ocBootArgStatus = .present
-                } else if out.contains("BOOTARG:MISSING") {
-                    self?.ocBootArgStatus = .missing
-                    self?.bootArgPromptPending = true
-                } else if out.contains("BOOTARG:NO_OC") {
+                // 解析 EFI 系统前置写入结果（安装时已自动配置，无需再弹确认框）
+                var wrote = 0, total = 0
+                for line in out.components(separatedBy: .newlines) {
+                    guard line.hasPrefix("SUMMARY") else { continue }
+                    let parts = line.split(separator: " ")
+                    if parts.count >= 4 {
+                        wrote = Int(parts[1]) ?? 0
+                        total = Int(parts[3]) ?? 0
+                    }
+                }
+                if total == 0 {
                     self?.ocBootArgStatus = .noOC
+                    self?.ocBootArgMessage = "未找到 OC 的 config.plist，无法自动配置系统前置。若是白果，请手动确保 AMFI/SIP 放行未签名代码。"
+                } else if wrote > 0 {
+                    self?.ocBootArgStatus = .configured
+                    let note = "已自动配置系统启动参数（AMFI 放行 + 睿频前置 + csr），请重启后风扇/灯光控制即可生效。备份在 ~/Library/Application Support/GHelper/efi-backups/"
+                    if let existing = self?.installMessage, !existing.isEmpty {
+                        self?.installMessage = existing + "\n" + note
+                    } else {
+                        self?.installMessage = note
+                    }
+                } else {
+                    self?.ocBootArgStatus = .present
                 }
             }
         }
@@ -378,30 +373,34 @@ final class HelperClient: ObservableObject {
 
     // MARK: 睿频前置（debug=0x144）
 
-    /// 用户态检测（只读已挂载卷，含 U 盘，不动 EFI）：扫所有 OC，任意一份缺参数即 MISSING。
+    /// 用户态检测（只读已挂载卷，含 U 盘，不动 EFI）：扫所有 OC，检查系统前置三件套是否齐备。
+    /// 任意一份缺任一项即视为未配置（missing）；无任何 OC 则 noOC。
     /// promptIfMissing=true 时若缺参数则置 bootArgPromptPending
     func checkOCBootArg(promptIfMissing: Bool = false) {
         let script = """
-        ANY=0; MISS=0
+        ANY=0; DBG=1; AMFI=1; CSR=1
+        uuid=7C436110-AB2A-4BBB-A880-FE41995C9F82
         for vol in /Volumes/*/EFI/OC/config.plist; do
           [ -f "$vol" ] || continue
           ANY=1
-          if /usr/libexec/PlistBuddy -c 'Print :NVRAM:Add:7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args' "$vol" 2>/dev/null | grep -q 'debug=0x144'; then
-            :
-          else
-            MISS=1
-          fi
+          ba=$(/usr/libexec/PlistBuddy -c "Print :NVRAM:Add:$uuid:boot-args" "$vol" 2>/dev/null)
+          echo "$ba" | grep -q 'debug=0x144' || DBG=0
+          echo "$ba" | grep -q 'amfi_get_out_of_my_way=0x1' || AMFI=0
+          csr=$(/usr/libexec/PlistBuddy -c "Print :NVRAM:Add:$uuid:csr-active-config" "$vol" 2>/dev/null)
+          [ -n "$csr" ] || CSR=0
         done
-        if [ "$ANY" = 0 ]; then echo NO_OC
-        elif [ "$MISS" = 1 ]; then echo MISSING
-        else echo PRESENT
+        if [ "$ANY" = 0 ]; then echo "PREREQ:NO_OC"
+        elif [ "$DBG" = 1 ] && [ "$AMFI" = 1 ] && [ "$CSR" = 1 ]; then echo "PREREQ:OK"
+        else echo "PREREQ:MISSING"
         fi
         """
         runUserScript(script) { [weak self] out in
             Task { @MainActor in
                 let s = out.trimmingCharacters(in: .whitespacesAndNewlines)
-                let st: OCBootArgStatus = s == "PRESENT" ? .present
-                    : (s == "MISSING" ? .missing : .noOC)
+                let st: OCBootArgStatus
+                if s.contains("PREREQ:NO_OC") { st = .noOC }
+                else if s.contains("PREREQ:OK") { st = .present }
+                else { st = .missing }
                 self?.ocBootArgStatus = st
                 if promptIfMissing && st == .missing {
                     self?.bootArgPromptPending = true
@@ -410,86 +409,124 @@ final class HelperClient: ObservableObject {
         }
     }
 
-    /// 提权写入 debug=0x144 到**所有** OpenCore 的 boot-args（内置盘 + U 盘），
-    /// 每份先备份 config.plist。会挂载未挂载的 EFI 分区；同一份配置按 inode 去重只处理一次。
-    /// 输出一行 `SUMMARY <写入> <已有> <总数>` 供 UI 解析。
-    func ensureBootArg() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let script = """
-        PLISTS=""
-        for vol in /Volumes/*/EFI/OC/config.plist; do
-          [ -f "$vol" ] && PLISTS="$PLISTS
-        $vol"
-        done
-        MPBASE=/private/tmp/ghelper-efi-$$
-        mkdir -p "$MPBASE"
-        MPS=""
-        for disk in $(diskutil list | awk '/EFI/{print $NF}'); do
-          MP="$MPBASE/$disk"
-          mkdir -p "$MP"
-          if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then
-            MPS="$MPS $MP"
-            [ -f "$MP/EFI/OC/config.plist" ] && PLISTS="$PLISTS
-        $MP/EFI/OC/config.plist"
-          else
-            diskutil mount "$disk" >/dev/null 2>&1
-            for vol in /Volumes/*/EFI/OC/config.plist; do
-              [ -f "$vol" ] && PLISTS="$PLISTS
-        $vol"
-            done
+    // MARK: 统一的 EFI 系统前置写入（debug=0x144 + AMFI 放行 + csr-active-config）
+    // 解决：ad-hoc 签名的特权助手在 macOS 15 严格 SIP/AMFI 下无法被 launchd 加载，
+    // 导致 App 连不上助手、风扇/灯光控制全部失效（监控读数不受影响）。
+    // 扫描所有 OC（内置盘 + U 盘，含未挂载 EFI），逐份备份后写入三件套，输出 SUMMARY 供 UI 解析。
+
+    /// 通用：收集所有 OC config.plist 路径。
+    /// 关键安全点：已挂载的卷直接采用，绝不重复挂载（double-mount 会让同一 FAT 卷被挂两次且都读写，
+    /// 改写文件时极易损坏 EFI 文件系统，表现为 EFI/OC 目录整体丢失）。
+    /// 仅对当前未挂载的 EFI 分区用 `diskutil mount` 挂一次，并记录我们新挂载的分区号以便末尾卸载。
+    private let ocConfigCollector: String = """
+    collect_oc_configs() {
+      out="$1"; usfile="${2:-}"; : > "$out"
+      seen=""
+      for vol in /Volumes/*/EFI/OC/config.plist; do
+        [ -f "$vol" ] || continue
+        echo "$seen" | grep -qxF "$vol" && continue
+        seen="$seen
+    $vol"; echo "$vol" >> "$out"
+      done
+      for disk in $(diskutil list | awk '$2=="EFI"{print $NF}'); do
+        mp=$(diskutil info "$disk" 2>/dev/null | awk -F': ' '/Mount Point/{print $2}' | xargs)
+        if [ -z "$mp" ] || [ "$mp" = "-" ]; then
+          if diskutil mount "$disk" >/dev/null 2>&1; then
+            mp=$(diskutil info "$disk" 2>/dev/null | awk -F': ' '/Mount Point/{print $2}' | xargs)
+            [ -n "$mp" ] && [ "$mp" != "-" ] && [ -n "$usfile" ] && echo "$disk" >> "$usfile"
           fi
-        done
-        export CFGS="$PLISTS"
+        fi
+        if [ -n "$mp" ] && [ "$mp" != "-" ] && [ -f "$mp/EFI/OC/config.plist" ]; then
+          echo "$seen" | grep -qxF "$mp/EFI/OC/config.plist" && continue
+          seen="$seen
+    $mp/EFI/OC/config.plist"; echo "$mp/EFI/OC/config.plist" >> "$out"
+        fi
+      done
+    }
+    """
+
+    /// 统一的 EFI 启动参数写入脚本（dryrun=true 时只预览不改写）。
+    /// 写入三件套：debug=0x144（按位 OR）+ AMFI 放行（amfi_get_out_of_my_way=0x1 amfi=0x80）+ csr-active-config=430A0000。
+    /// 安全要点：见 ocConfigCollector（不重复挂载）；改写后 plist 保留原格式并 plutil -lint 校验。
+    private func efiWriteScript(dryrun: Bool) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dry = dryrun ? "1" : "0"
+        return ocConfigCollector + """
+        CFGOUT=/private/tmp/ghelper-cfg-$$.txt
+        USOUT=/private/tmp/ghelper-us-$$.txt
+        collect_oc_configs "$CFGOUT" "$USOUT"
         export BDIR="\(home)/Library/Application Support/GHelper/efi-backups"
+        export DRYRUN="\(dry)"
         mkdir -p "$BDIR"
         export TS=$(date +%Y%m%d-%H%M%S)
         python3 - <<'PY'
-        import plistlib, re, os, shutil
-        raw = [p for p in os.environ.get('CFGS', '').split('\\n') if p.strip()]
-        seen, paths = set(), []
-        for p in raw:
-            try:
-                st = os.stat(p)
-            except OSError:
-                continue
-            key = (st.st_dev, st.st_ino)
-            if key in seen:
-                continue
-            seen.add(key)
-            paths.append(p)
-        bdir, ts = os.environ['BDIR'], os.environ['TS']
-        wrote = already = 0
-        for i, path in enumerate(paths, 1):
-            comps = path.strip('/').split('/')
-            label = comps[-4].replace(' ', '_') if len(comps) >= 4 else 'cfg'
-            shutil.copy(path, os.path.join(bdir, 'config-%s-%d-%s.plist' % (ts, i, label)))
-            data = plistlib.load(open(path, 'rb'))
-            nv = data.setdefault('NVRAM', {})
-            add = nv.setdefault('Add', {})
-            uuid = '7C436110-AB2A-4BBB-A880-FE41995C9F82'
-            entry = add.setdefault(uuid, {})
-            ba = entry.get('boot-args') or ''
-            m = re.search(r'debug=0x([0-9a-fA-F]+)', ba)
+        import plistlib, os, shutil, re, subprocess
+        paths=[p for p in open(os.environ['CFGOUT']).read().split('\\n') if p.strip()]
+        # inode 去重（同一份 config 可能经多条路径命中）
+        seen=set(); uniq=[]
+        for p in paths:
+            try: st=os.stat(p)
+            except OSError: continue
+            k=(st.st_dev, st.st_ino)
+            if k in seen: continue
+            seen.add(k); uniq.append(p)
+        uuid='7C436110-AB2A-4BBB-A880-FE41995C9F82'
+        AMFI=['amfi_get_out_of_my_way=0x1','amfi=0x80']
+        CSR=bytes([0x43,0x0a,0x00,0x00])
+        dryrun = os.environ.get('DRYRUN','0')=='1'
+        bdir=os.environ['BDIR']; ts=os.environ['TS']
+        wrote=unchanged=amfi_added=csr_added=0
+        for i,path in enumerate(uniq,1):
+            comps=path.strip('/').split('/')
+            label=comps[-4].replace(' ','_') if len(comps)>=4 else 'cfg'
+            raw=open(path,'rb').read()
+            fmt = plistlib.FMT_BINARY if raw[:6]==b'bplist' else plistlib.FMT_XML
+            data=plistlib.loads(raw)
+            nv=data.setdefault('NVRAM',{})
+            add=nv.setdefault('Add',{})
+            entry=add.setdefault(uuid,{})
+            ba=entry.get('boot-args') or ''
+            m=re.search(r'debug=0x([0-9a-fA-F]+)', ba)
+            newba=ba
             if m:
-                cur = int(m.group(1), 16)
-                new = cur | 0x144
-                ba2 = ba.replace(m.group(0), 'debug=0x%x' % new)
-                changed = (new != cur)
+                cur=int(m.group(1),16); nvv=cur|0x144
+                if nvv!=cur:
+                    newba=ba.replace(m.group(0),'debug=0x%x'%nvv)
             else:
-                ba2 = (ba + ' debug=0x144').strip()
-                changed = True
+                newba=(ba+' debug=0x144').strip()
+            for f in AMFI:
+                if f not in newba:
+                    newba=(newba+' '+f).strip(); amfi_added+=1
+            entry['boot-args']=newba
+            csr_add=False
+            if entry.get('csr-active-config') is None:
+                entry['csr-active-config']=CSR; csr_add=True; csr_added+=1
+            changed = (newba!=ba) or csr_add
+            if dryrun:
+                print('DRYRUN %s'%path)
+                print('  boot-args: %r -> %r'%(ba,newba))
+                if csr_add: print('  csr-active-config: (none) -> 430A0000')
+                continue
             if changed:
-                entry['boot-args'] = ba2
-                plistlib.dump(data, open(path, 'wb'))
-                wrote += 1
+                shutil.copy(path, os.path.join(bdir,'config-%s-%d-%s.plist'%(ts,i,label)))
+                plistlib.dump(data, open(path,'wb'), fmt=fmt)
+                r=subprocess.run(['plutil','-lint',path],capture_output=True,text=True)
+                if r.returncode==0: wrote+=1
+                else: print('PLISTERR %s %s'%(path,r.stdout.strip()))
             else:
-                already += 1
-        print('SUMMARY %d %d %d' % (wrote, already, len(paths)))
+                unchanged+=1
+        print('SUMMARY %d %d %d %d %d'%(wrote,unchanged,len(uniq),amfi_added,csr_added))
         PY
-        for m in $MPS; do umount "$m" 2>/dev/null; done
-        rm -rf "$MPBASE" 2>/dev/null
+        for d in $(cat "$USOUT" 2>/dev/null); do diskutil unmount "$d" >/dev/null 2>&1; done
+        rm -f "$CFGOUT" "$USOUT"
         """
+    }
 
+    /// 提权写入「系统前置三件套」到所有 OpenCore 的 boot-args / NVRAM（内置盘 + U 盘），
+    /// 每份先备份 config.plist。会挂载未挂载的 EFI 分区；同一份配置按 inode 去重只处理一次。
+    /// 输出一行 `SUMMARY <写入> <未变> <总数> <amfi 新增> <csr 新增>` 供 UI 解析。
+    func ensureBootArg() {
+        let script = efiWriteScript(dryrun: false)
         runAdminScript(script) { [weak self] ok, out in
             Task { @MainActor in
                 let message = out.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -498,7 +535,7 @@ final class HelperClient: ObservableObject {
                     for line in message.components(separatedBy: .newlines) {
                         guard line.hasPrefix("SUMMARY") else { continue }
                         let parts = line.split(separator: " ")
-                        if parts.count >= 4 {
+                        if parts.count >= 5 {
                             wrote = Int(parts[1]) ?? 0
                             already = Int(parts[2]) ?? 0
                             total = Int(parts[3]) ?? 0
@@ -506,22 +543,54 @@ final class HelperClient: ObservableObject {
                     }
                     if total == 0 {
                         self?.ocBootArgStatus = .noOC
-                        self?.ocBootArgMessage = "未找到 OpenCore 的 config.plist（内置盘与 U 盘均未发现）"
+                        self?.ocBootArgMessage = "未找到 OpenCore 的 config.plist（内置盘与 U 盘均未发现）。若是白果或非 OC 引导，请手动确保 AMFI/SIP 已放行未签名代码，否则风扇/灯光控制将无法加载特权助手。"
                     } else if wrote > 0 {
                         self?.ocBootArgStatus = .configured
-                        var msg = "已写入 debug=0x144（\(wrote)/\(total) 份 OC 配置，含 U 盘）"
+                        var msg = "已写入系统前置（debug=0x144 + AMFI 放行 + csr-active-config，共 \(wrote)/\(total) 份 OC 配置，含 U 盘）"
                         if already > 0 { msg += "，另 \(already) 份本来已有" }
                         msg += "。请重启生效（备份在 ~/Library/Application Support/GHelper/efi-backups/）"
                         self?.ocBootArgMessage = msg
                     } else {
                         self?.ocBootArgStatus = .present
-                        self?.ocBootArgMessage = "共 \(total) 份 OC 配置（含 U 盘）均已有 debug=0x144，无需修改"
+                        self?.ocBootArgMessage = "共 \(total) 份 OC 配置（含 U 盘）均已含系统前置参数，无需修改"
                     }
                 } else {
                     self?.ocBootArgStatus = .noOC
                     self?.ocBootArgMessage = "配置失败：\(message)"
                     self?.lastError = message
                 }
+            }
+        }
+    }
+
+    /// 预览（DRYRUN）将要修改的 OC 配置，列出具体文件与目标值，供二次确认。
+    /// 由 UI 的「现在添加」触发；确认后再调 ensureBootArg() 真正写入。
+    func previewBootArg() {
+        bootArgPromptPending = false
+        let script = efiWriteScript(dryrun: true)
+        runAdminScript(script) { [weak self] ok, out in
+            Task { @MainActor in
+                guard let self else { return }
+                var lines: [String] = []
+                var total = 0
+                for ln in out.components(separatedBy: .newlines) {
+                    if ln.hasPrefix("DRYRUN") {
+                        lines.append(ln)
+                    } else if ln.hasPrefix("SUMMARY") {
+                        let parts = ln.split(separator: " ")
+                        if parts.count >= 4 { total = Int(parts[3]) ?? 0 }
+                    }
+                }
+                if total == 0 {
+                    self.ocBootArgStatus = .noOC
+                    self.bootArgPreviewText = "未找到任何 OpenCore 配置（内置盘与 U 盘均未发现 EFI/OC/config.plist），无需配置。若是白果或非 OC 引导，请手动确保 AMFI/SIP 放行未签名代码。"
+                } else {
+                    let header = "即将修改以下 \(total) 份 OpenCore 配置（每份改动前自动备份到 ~/Library/Application Support/GHelper/efi-backups/）：\n"
+                    let body = lines.joined(separator: "\n")
+                    let footer = "\n\n确认后写入：debug=0x144 + amfi_get_out_of_my_way=0x1 + amfi=0x80 + csr-active-config=430A0000，需重启生效。"
+                    self.bootArgPreviewText = header + body + footer
+                }
+                self.bootArgConfirmPending = true
             }
         }
     }
@@ -559,7 +628,7 @@ final class HelperClient: ObservableObject {
         efiMessage = "正在扫描 EFI 分区…"
         let script = """
         diskutil list | awk '/EFI/{print $NF}' | while read disk; do
-          mp=$(diskutil info "$disk" 2>/dev/null | awk -F': ' '/Mount Point/{print $2}')
+          mp=$(diskutil info "$disk" 2>/dev/null | awk -F': ' '/Mount Point/{print $2}' | xargs)
           [ "$mp" = "-" ] && mp=""
           hasoc=0; [ -n "$mp" ] && [ -f "$mp/EFI/OC/config.plist" ] && hasoc=1
           vol=$([ -n "$mp" ] && basename "$mp" || echo "")
@@ -689,29 +758,16 @@ final class HelperClient: ObservableObject {
         efiWorking = true
         efiMessage = "正在补齐缺失驱动（需管理员密码）…"
         let coreList = coreKexts.joined(separator: " ")
-        let script = """
+        let script = ocConfigCollector + """
         SRC='\(src)'
         BDIR="$HOME/Library/Application Support/GHelper/efi-backups"
         mkdir -p "$BDIR"
         TS=$(date +%Y%m%d-%H%M%S)
-        PLISTS=""
-        for vol in /Volumes/*/EFI/OC/config.plist; do [ -f "$vol" ] && PLISTS="$PLISTS
-        $vol"; done
-        MPBASE=/private/tmp/ghelper-efi-$$
-        mkdir -p "$MPBASE"
-        for disk in $(diskutil list | awk '/EFI/{print $NF}'); do
-          MP="$MPBASE/$disk"
-          mkdir -p "$MP"
-          if mount_msdos "/dev/$disk" "$MP" 2>/dev/null; then
-            [ -f "$MP/EFI/OC/config.plist" ] && PLISTS="$PLISTS
-        $MP/EFI/OC/config.plist"
-          else
-            diskutil mount "$disk" >/dev/null 2>&1
-            for vol in /Volumes/*/EFI/OC/config.plist; do [ -f "$vol" ] && PLISTS="$PLISTS
-        $vol"; done
-          fi
-        done
-        export PLISTS SRC BDIR TS
+        CFGOUT=/private/tmp/ghelper-kext-cfg-$$.txt
+        USOUT=/private/tmp/ghelper-kext-us-$$.txt
+        collect_oc_configs "$CFGOUT" "$USOUT"
+        export PLISTS=$(cat "$CFGOUT")
+        export SRC BDIR TS
         python3 - <<'PY'
         import plistlib, os, shutil, glob
         src = os.environ['SRC']
@@ -734,7 +790,9 @@ final class HelperClient: ObservableObject {
             d = os.path.dirname(os.path.dirname(os.path.dirname(p)))
             kdir = os.path.join(d, 'EFI/OC/Kexts')
             os.makedirs(kdir, exist_ok=True)
-            cfg = plistlib.load(open(p, 'rb'))
+            raw = open(p, 'rb').read()
+            fmt = plistlib.FMT_BINARY if raw[:6] == b'bplist' else plistlib.FMT_XML
+            cfg = plistlib.loads(raw)
             add = cfg.setdefault('Kernel', {}).setdefault('Add', [])
             en = {e.get('BundlePath'): e for e in add}
             for name in core:
@@ -756,9 +814,11 @@ final class HelperClient: ObservableObject {
             core_entries.sort(key=lambda e: core.index(e['BundlePath']))
             cfg['Kernel']['Add'] = core_entries + others
             shutil.copy(p, os.path.join(bdir, 'config-%s-%d.plist' % (ts, i)))
-            plistlib.dump(cfg, open(p, 'wb'))
+            plistlib.dump(cfg, open(p, 'wb'), fmt=fmt)
         print('SUMMARY %d %d %d' % (copied, enabled, total))
         PY
+        for d in $(cat "$USOUT" 2>/dev/null); do diskutil unmount "$d" >/dev/null 2>&1; done
+        rm -f "$CFGOUT" "$USOUT"
         """
         runAdminScript(script) { [weak self] ok, out in
             Task { @MainActor in

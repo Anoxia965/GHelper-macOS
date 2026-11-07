@@ -860,7 +860,7 @@ struct SettingsView: View {
                 }
             }
 
-            DashCard("睿频开关前置（debug=0x144）") {
+            DashCard("系统前置（风扇/灯光 + 睿频必需）") {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(ocDotColor).frame(width: 7, height: 7)
@@ -878,7 +878,7 @@ struct SettingsView: View {
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("debug=0x144 让 zenmaster 能直连 AMD SMU，睿频开关才生效。内置盘与 U 盘上所有 OpenCore 配置会一并写入；每份改动前自动备份 config.plist 到 ~/Library/Application Support/GHelper/efi-backups/，需重启生效。")
+                Text("风扇写（WMNB/EC）与灯光写（GHRGB kext）都依赖 root 助手，而 macOS 15 严格 SIP/AMFI 会拒绝加载 ad-hoc 签名的助手，导致「能读不能控」。安装时已自动把三件套写入所有 OpenCore 配置（含 U 盘）：debug=0x144（睿频开关）+ AMFI 放行（amfi_get_out_of_my_way=0x1 amfi=0x80）+ csr-active-config=430A0000，重启后即生效。每份改动前自动备份到 ~/Library/Application Support/GHelper/efi-backups/。")
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
 
@@ -997,11 +997,17 @@ struct SettingsView: View {
             }
         }
         .onAppear { model.helper.checkOCBootArg() }
-        .alert("配置睿频前置", isPresented: $model.helper.bootArgPromptPending) {
-            Button("现在添加") { model.helper.ensureBootArg() }
+        .alert("配置系统前置", isPresented: $model.helper.bootArgPromptPending) {
+            Button("现在添加") { model.helper.previewBootArg() }
             Button("稍后", role: .cancel) {}
         } message: {
-            Text("睿频开关需要 OC 的 boot-args 加 debug=0x144。是否现在自动添加？会扫描内置盘与 U 盘上所有 OpenCore 配置，每份先备份 config.plist 再写入，修改后需重启生效。")
+            Text("风扇/灯光控制需要 OC 的 boot-args 加 AMFI 放行参数（amfi_get_out_of_my_way=0x1 amfi=0x80）+ csr-active-config=430A0000，睿频开关另需 debug=0x144。是否现在自动添加？会先列出将要修改的所有 OpenCore 配置供你确认，每份先备份 config.plist 再写入，修改后需重启生效。")
+        }
+        .alert("确认修改以下 EFI 配置", isPresented: $model.helper.bootArgConfirmPending) {
+            Button("确认添加") { model.helper.ensureBootArg() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(model.helper.bootArgPreviewText)
         }
         .alert("补齐缺失驱动", isPresented: $efiFixPending) {
             Button("现在补齐") { model.helper.installMissingKexts() }
@@ -1016,7 +1022,7 @@ struct SettingsView: View {
         case .unknown:   return "检测中…"
         case .noOC:      return "未检测到已挂载的 OC EFI"
         case .present, .configured: return "已配置 ✓"
-        case .missing:   return "未配置（有 OC 缺 debug=0x144）"
+        case .missing:   return "未配置（缺 AMFI/SIP 放行或 debug=0x144）"
         }
     }
 
