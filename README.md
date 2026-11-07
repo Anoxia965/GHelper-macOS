@@ -70,10 +70,12 @@ OpenCore 在开机时会自动**注入**这些 kext，所以**不能**装到 `/L
    - 用 **ProperTree** 打开 `EFI/OC/config.plist` → 菜单 `File ▸ OC Snapshot`（⌘R）；或
    - 用 **OCAT**（OpenCore Auxiliary Tools）打开后点「更新 / 保存」。
 4. **AMD 用户**：确认 `AMDRyzenCPUPowerManagement.kext` 排在 `SMCAMDProcessor.kext` **之前**（顺序反了会读不到 CPU 温度）。
-5. **睿频开关前置（v1.3.0+）**：想用 App 里的「睿频开关（开=跑满 / 关=锁基础频率降温）」，OC 的 `NVRAM → Add → 7C436110-…:boot-args` 需含 `debug=0x144`。App 内点「安装 / 重装」会自动检测并补上；手动装驱动的用户请自己确认已加。
+5. **系统前置（v1.8.5+）**：风扇/灯光控制需要 ad-hoc 签名的 root 助手能被 launchd 加载，OC 的 `NVRAM → Add → 7C436110-…` 需要 `debug=0x144`（睿频开关）+ AMFI 放行（`amfi_get_out_of_my_way=0x1 amfi=0x80`）+ `csr-active-config=430A0000`。点「安装 / 重装」后 App 会**先列出将要修改的所有 OpenCore 配置（含 U 盘）供你确认**，你点「确认添加」才会写入；未确认前 EFI 不会被改动。也可在「设置 ▸ 系统前置」点「检测并配置…」单独补配。修改后需重启生效。
 6. 保存并重启。
 
 > ⚠️ 只是在你现有 EFI 上**追加**这几个 kext，别动其它部分。
+>
+> 🛡️ **EFI 安全（v1.8.5+）**：所有涉及 EFI 的操作都遵循 —— ① 已挂载的 EFI 卷直接使用，**绝不重复挂载**（同一 FAT 卷被挂两次并读写会损坏文件系统，导致 `EFI/OC` 目录丢失）；② 未挂载的分区只挂一次，且只卸载自己挂的；③ 任何写入前先备份 `config.plist` 到 `~/Library/Application Support/GHelper/efi-backups/`；④ 改写保留原 plist 格式（binary/XML），采用「临时文件 → `plutil -lint` 校验 → 原子替换」，校验失败即删除临时文件、原文件保持完好；⑤ **安装与驱动补齐都必须先预览 + 二次确认**，App 不会在后台静默改写 EFI。白果无法放宽核心 SIP 位，此路不适用。
 
 ### 第 3 步：安装 App
 

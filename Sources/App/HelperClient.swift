@@ -204,7 +204,8 @@ final class HelperClient: ObservableObject {
     // MARK: 安装
 
     /// 用 osascript 弹系统密码框，一次性把助手装进去
-    func install() {
+    /// configureEFI=false 用于后台自动重装（助手版本同步）：只装助手，绝不碰 EFI、不弹确认框。
+    func install(configureEFI: Bool = true) {
         // 显式拼 App 包内路径，不依赖 Info.plist 的 SMAuxiliaryExecutables 声明
         // （当前 Info.plist 未声明该键，forAuxiliaryExecutable 可能返回 nil 导致安装失败）
         let helperURL = Bundle.main.executableURL?
@@ -288,42 +289,40 @@ final class HelperClient: ObservableObject {
         "$VPY" -m pip install --quiet zenmaster 2>/dev/null || true
         sleep 1
         echo installed
-        # 安装时自动配置「系统前置三件套」（debug=0x144 + AMFI 放行 + csr-active-config），
-        # 让 ad-hoc 签名的特权助手能在 macOS 15 严格 SIP/AMFI 下被 launchd 加载（风扇/灯光控制必需）。
-        # 复用统一写入脚本；已配置则跳过，缺则写入并备份，输出 SUMMARY 供 UI 解析。
-        \(efiWriteScript(dryrun: false))
+        # 安装阶段只做「只读预览」（DRYRUN），绝不写入 EFI。
+        # ad-hoc 签名的特权助手在 macOS 15 严格 SIP/AMFI 下需要三件套，但任何 EFI 改动都必须
+        # 先让用户看到将要改哪几份、点确认后才由 ensureBootArg() 写入（见下方回调）。
+        \(configureEFI ? efiWriteScript(dryrun: true) : "echo 'efi-preview:skipped'")
         """
 
         runAdminScript(script) { [weak self] ok, out in
             Task { @MainActor in
                 self?.lastError = ok ? nil : out
-                if let m = out.split(separator: "\n").first(where: { $0.hasPrefix("KEXTMSG:") }) {
+                // do shell script 回传的换行可能是 \r，用 .newlines 统一切分，避免提示丢失
+                if let m = out.components(separatedBy: .newlines).first(where: { $0.hasPrefix("KEXTMSG:") }) {
                     self?.installMessage = String(m.dropFirst("KEXTMSG:".count))
                 }
                 self?.refreshStatus()
-                // 解析 EFI 系统前置写入结果（安装时已自动配置，无需再弹确认框）
-                var wrote = 0, total = 0
-                for line in out.components(separatedBy: .newlines) {
-                    guard line.hasPrefix("SUMMARY") else { continue }
-                    let parts = line.split(separator: " ")
-                    if parts.count >= 4 {
-                        wrote = Int(parts[1]) ?? 0
-                        total = Int(parts[3]) ?? 0
-                    }
+                // 安装阶段只做了只读预览；是否写入 EFI 完全交给用户二次确认。
+                // 后台自动重装（configureEFI=false）不解析、不弹框、不碰 EFI。
+                guard configureEFI else { return }
+                if !ok {
+                    self?.ocBootArgMessage = "系统前置预览失败：\(out)（EFI 未被改动）"
+                    return
                 }
-                if total == 0 {
+                let p = self?.parseEFIPreview(out) ?? HelperClient.EFIPreview()
+                self?.bootArgPreviewText = "安装已完成（特权助手、灯控驱动均已就位）。\n\n" + p.text
+                if p.total == 0 {
                     self?.ocBootArgStatus = .noOC
-                    self?.ocBootArgMessage = "未找到 OC 的 config.plist，无法自动配置系统前置。若是白果，请手动确保 AMFI/SIP 放行未签名代码。"
-                } else if wrote > 0 {
-                    self?.ocBootArgStatus = .configured
-                    let note = "已自动配置系统启动参数（AMFI 放行 + 睿频前置 + csr），请重启后风扇/灯光控制即可生效。备份在 ~/Library/Application Support/GHelper/efi-backups/"
-                    if let existing = self?.installMessage, !existing.isEmpty {
-                        self?.installMessage = existing + "\n" + note
-                    } else {
-                        self?.installMessage = note
-                    }
+                    self?.ocBootArgMessage = "未找到 OC 的 config.plist，EFI 未被改动。若是白果，请手动确保 AMFI/SIP 放行未签名代码。"
+                } else if p.needConfirm {
+                    // 关键：只有用户点「确认添加」才会真正写入 EFI，此处绝不自动写
+                    self?.ocBootArgStatus = .missing
+                    self?.ocBootArgMessage = "系统前置待确认：请留意弹窗，确认后才会写入 EFI（重启生效）。"
+                    self?.bootArgConfirmPending = true
                 } else {
                     self?.ocBootArgStatus = .present
+                    self?.ocBootArgMessage = "系统前置参数已齐备，EFI 无需改动。"
                 }
             }
         }
@@ -367,7 +366,9 @@ final class HelperClient: ObservableObject {
         guard !autoReinstallTriggered else { return }
         autoReinstallTriggered = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.install()
+            // 后台版本同步只更新助手二进制：不碰 EFI、不弹 EFI 确认框，
+            // 避免用户没主动安装时突然弹出「要改启动参数」的窗口。
+            self?.install(configureEFI: false)
         }
     }
 
@@ -421,6 +422,9 @@ final class HelperClient: ObservableObject {
     private let ocConfigCollector: String = """
     collect_oc_configs() {
       out="$1"; usfile="${2:-}"; : > "$out"
+      # 必须同时清空「本次自己挂载的分区」列表：否则末尾可能按陈旧记录
+      # 卸载到用户自己挂载的 EFI 卷（违背「只卸载自己挂的」）。
+      [ -n "$usfile" ] && : > "$usfile"
       seen=""
       for vol in /Volumes/*/EFI/OC/config.plist; do
         [ -f "$vol" ] || continue
@@ -476,6 +480,7 @@ final class HelperClient: ObservableObject {
         dryrun = os.environ.get('DRYRUN','0')=='1'
         bdir=os.environ['BDIR']; ts=os.environ['TS']
         wrote=unchanged=amfi_added=csr_added=0
+        would=0
         for i,path in enumerate(uniq,1):
             comps=path.strip('/').split('/')
             label=comps[-4].replace(' ','_') if len(comps)>=4 else 'cfg'
@@ -503,21 +508,41 @@ final class HelperClient: ObservableObject {
                 entry['csr-active-config']=CSR; csr_add=True; csr_added+=1
             changed = (newba!=ba) or csr_add
             if dryrun:
-                print('DRYRUN %s'%path)
-                print('  boot-args: %r -> %r'%(ba,newba))
-                if csr_add: print('  csr-active-config: (none) -> 430A0000')
+                # 只列出「确实需要改」的配置，已配齐的不打扰用户
+                if changed:
+                    would+=1
+                    print('DRYRUN %s'%path)
+                    print('DRYRUN   boot-args: %r -> %r'%(ba,newba))
+                    if csr_add: print('DRYRUN   csr-active-config: (none) -> 430A0000')
                 continue
             if changed:
                 shutil.copy(path, os.path.join(bdir,'config-%s-%d-%s.plist'%(ts,i,label)))
-                plistlib.dump(data, open(path,'wb'), fmt=fmt)
-                r=subprocess.run(['plutil','-lint',path],capture_output=True,text=True)
-                if r.returncode==0: wrote+=1
-                else: print('PLISTERR %s %s'%(path,r.stdout.strip()))
+                # 安全写入：先写同目录临时文件 -> plutil 校验 -> 原子替换。
+                # 任何一步失败都删掉临时文件、保留原 config.plist 完好，绝不留下半写坏的文件。
+                tmp = path + '.ghelper-tmp'
+                try:
+                    with open(tmp,'wb') as f:
+                        plistlib.dump(data, f, fmt=fmt)
+                    r=subprocess.run(['plutil','-lint',tmp],capture_output=True,text=True)
+                    if r.returncode!=0:
+                        print('PLISTERR %s %s'%(path,r.stdout.strip()))
+                        os.remove(tmp)
+                        continue
+                    os.replace(tmp, path)
+                    wrote+=1
+                except Exception as e:
+                    print('PLISTERR %s %s'%(path,e))
+                    try: os.remove(tmp)
+                    except OSError: pass
             else:
                 unchanged+=1
+        print('WOULDWRITE %d'%would)
         print('SUMMARY %d %d %d %d %d'%(wrote,unchanged,len(uniq),amfi_added,csr_added))
         PY
-        for d in $(cat "$USOUT" 2>/dev/null); do diskutil unmount "$d" >/dev/null 2>&1; done
+        sync
+        for d in $(cat "$USOUT" 2>/dev/null); do
+          diskutil unmount "$d" >/dev/null 2>&1 || { sleep 1; diskutil unmount "$d" >/dev/null 2>&1; }
+        done
         rm -f "$CFGOUT" "$USOUT"
         """
     }
@@ -534,7 +559,8 @@ final class HelperClient: ObservableObject {
                     var wrote = 0, already = 0, total = 0
                     for line in message.components(separatedBy: .newlines) {
                         guard line.hasPrefix("SUMMARY") else { continue }
-                        let parts = line.split(separator: " ")
+                        let parts = line.components(separatedBy: .whitespacesAndNewlines)
+                            .filter { !$0.isEmpty }
                         if parts.count >= 5 {
                             wrote = Int(parts[1]) ?? 0
                             already = Int(parts[2]) ?? 0
@@ -563,6 +589,46 @@ final class HelperClient: ObservableObject {
         }
     }
 
+    /// DRYRUN 输出解析结果（只读预览，绝不写入 EFI）。
+    struct EFIPreview {
+        var text: String = ""       /// 供二次确认弹窗展示的正文
+        var wouldWrite: Int = 0     /// 实际需要改动的 OC 配置份数
+        var total: Int = 0          /// 扫描到的 OC 配置总份数
+        var needConfirm: Bool { wouldWrite > 0 }
+    }
+
+    /// 从 efiWriteScript(dryrun:) 的输出里解析预览。
+    /// 安装流程与手动「系统前置」按钮共用，保证两处确认逻辑完全一致。
+    /// 混杂的其它脚本输出（installed / KEXTMSG / helper-version 等）会被忽略。
+    private func parseEFIPreview(_ out: String) -> EFIPreview {
+        var p = EFIPreview()
+        var lines: [String] = []
+        for ln in out.components(separatedBy: .newlines) {
+            if ln.hasPrefix("DRYRUN ") {
+                lines.append(String(ln.dropFirst("DRYRUN ".count)))
+            } else if ln.hasPrefix("WOULDWRITE ") {
+                p.wouldWrite = Int(ln.dropFirst("WOULDWRITE ".count)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            } else if ln.hasPrefix("SUMMARY ") {
+                let parts = ln.components(separatedBy: .whitespacesAndNewlines)
+                    .filter { !$0.isEmpty }
+                if parts.count >= 4 { p.total = Int(parts[3]) ?? 0 }
+            }
+        }
+        if p.total == 0 {
+            p.text = "未找到任何 OpenCore 配置（内置盘与 U 盘均未发现 EFI/OC/config.plist），无需改动 EFI。若是白果或非 OC 引导，请手动确保 AMFI/SIP 放行未签名代码。"
+        } else if p.wouldWrite == 0 {
+            p.text = "扫描到 \(p.total) 份 OpenCore 配置，系统前置参数均已齐备，无需改动 EFI。"
+        } else {
+            p.text = "即将修改以下 \(p.wouldWrite) 份 OpenCore 配置（共扫描到 \(p.total) 份）：\n"
+                + lines.joined(separator: "\n")
+                + "\n\n每份改动前会先备份 config.plist，写入采用临时文件 + 校验 + 原子替换。"
+                + "\n确认后写入：debug=0x144 + amfi_get_out_of_my_way=0x1 + amfi=0x80 + csr-active-config=430A0000，需重启生效。"
+                + "\n\n此时 EFI 尚未被改动；点「取消」则完全不写入。点「确认添加」会再请求一次管理员密码（这是写入 EFI 的独立提权）。"
+        }
+        return p
+    }
+
     /// 预览（DRYRUN）将要修改的 OC 配置，列出具体文件与目标值，供二次确认。
     /// 由 UI 的「现在添加」触发；确认后再调 ensureBootArg() 真正写入。
     func previewBootArg() {
@@ -571,26 +637,17 @@ final class HelperClient: ObservableObject {
         runAdminScript(script) { [weak self] ok, out in
             Task { @MainActor in
                 guard let self else { return }
-                var lines: [String] = []
-                var total = 0
-                for ln in out.components(separatedBy: .newlines) {
-                    if ln.hasPrefix("DRYRUN") {
-                        lines.append(ln)
-                    } else if ln.hasPrefix("SUMMARY") {
-                        let parts = ln.split(separator: " ")
-                        if parts.count >= 4 { total = Int(parts[3]) ?? 0 }
-                    }
-                }
-                if total == 0 {
+                let p = self.parseEFIPreview(ok ? out : "")
+                self.bootArgPreviewText = p.text
+                if !ok {
                     self.ocBootArgStatus = .noOC
-                    self.bootArgPreviewText = "未找到任何 OpenCore 配置（内置盘与 U 盘均未发现 EFI/OC/config.plist），无需配置。若是白果或非 OC 引导，请手动确保 AMFI/SIP 放行未签名代码。"
-                } else {
-                    let header = "即将修改以下 \(total) 份 OpenCore 配置（每份改动前自动备份到 ~/Library/Application Support/GHelper/efi-backups/）：\n"
-                    let body = lines.joined(separator: "\n")
-                    let footer = "\n\n确认后写入：debug=0x144 + amfi_get_out_of_my_way=0x1 + amfi=0x80 + csr-active-config=430A0000，需重启生效。"
-                    self.bootArgPreviewText = header + body + footer
+                    self.ocBootArgMessage = "预览失败：\(out)"
+                    self.lastError = out
+                    return
                 }
-                self.bootArgConfirmPending = true
+                if p.total == 0 { self.ocBootArgStatus = .noOC }
+                // 只有确实需要改动才弹二次确认；已配齐时不打扰用户
+                self.bootArgConfirmPending = p.needConfirm
             }
         }
     }
@@ -760,7 +817,7 @@ final class HelperClient: ObservableObject {
         let coreList = coreKexts.joined(separator: " ")
         let script = ocConfigCollector + """
         SRC='\(src)'
-        BDIR="$HOME/Library/Application Support/GHelper/efi-backups"
+        BDIR="\(FileManager.default.homeDirectoryForCurrentUser.path)/Library/Application Support/GHelper/efi-backups"
         mkdir -p "$BDIR"
         TS=$(date +%Y%m%d-%H%M%S)
         CFGOUT=/private/tmp/ghelper-kext-cfg-$$.txt
@@ -769,7 +826,7 @@ final class HelperClient: ObservableObject {
         export PLISTS=$(cat "$CFGOUT")
         export SRC BDIR TS
         python3 - <<'PY'
-        import plistlib, os, shutil, glob
+        import plistlib, os, shutil, glob, subprocess
         src = os.environ['SRC']
         bdir = os.environ['BDIR']
         ts = os.environ['TS']
@@ -814,10 +871,27 @@ final class HelperClient: ObservableObject {
             core_entries.sort(key=lambda e: core.index(e['BundlePath']))
             cfg['Kernel']['Add'] = core_entries + others
             shutil.copy(p, os.path.join(bdir, 'config-%s-%d.plist' % (ts, i)))
-            plistlib.dump(cfg, open(p, 'wb'), fmt=fmt)
+            # 与 efiWriteScript 一致：临时文件 -> plutil 校验 -> 原子替换，绝不半写坏 config.plist
+            tmp = p + '.ghelper-tmp'
+            try:
+                with open(tmp, 'wb') as f:
+                    plistlib.dump(cfg, f, fmt=fmt)
+                r = subprocess.run(['plutil', '-lint', tmp], capture_output=True, text=True)
+                if r.returncode != 0:
+                    print('PLISTERR %s %s' % (p, r.stdout.strip()))
+                    os.remove(tmp)
+                    continue
+                os.replace(tmp, p)
+            except Exception as e:
+                print('PLISTERR %s %s' % (p, e))
+                try: os.remove(tmp)
+                except OSError: pass
         print('SUMMARY %d %d %d' % (copied, enabled, total))
         PY
-        for d in $(cat "$USOUT" 2>/dev/null); do diskutil unmount "$d" >/dev/null 2>&1; done
+        sync
+        for d in $(cat "$USOUT" 2>/dev/null); do
+          diskutil unmount "$d" >/dev/null 2>&1 || { sleep 1; diskutil unmount "$d" >/dev/null 2>&1; }
+        done
         rm -f "$CFGOUT" "$USOUT"
         """
         runAdminScript(script) { [weak self] ok, out in

@@ -53,6 +53,23 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environmentObject(model)
+        // EFI 相关确认框挂在根视图：安装入口分布在「设置」和「风扇」页，
+        // 若挂在 SettingsView，从风扇页点「去安装」时确认框不会出现（兼容修复）。
+        .alert("配置系统前置", isPresented: $model.helper.bootArgPromptPending) {
+            Button("现在添加") { model.helper.previewBootArg() }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            Text("风扇/灯光控制需要 OC 的 boot-args 加 AMFI 放行参数（amfi_get_out_of_my_way=0x1 amfi=0x80）+ csr-active-config=430A0000，睿频开关另需 debug=0x144。是否现在自动添加？会先列出将要修改的所有 OpenCore 配置供你确认，每份先备份 config.plist 再写入，修改后需重启生效。")
+        }
+        .alert("确认修改以下 EFI 配置", isPresented: $model.helper.bootArgConfirmPending) {
+            Button("确认添加") { model.helper.ensureBootArg() }
+            Button("取消", role: .cancel) {
+                model.helper.ocBootArgStatus = .missing
+                model.helper.ocBootArgMessage = "已取消，EFI 未被改动。需要时点「检测并配置…」或重新「安装 / 重装」即可再次预览并确认。"
+            }
+        } message: {
+            Text(model.helper.bootArgPreviewText)
+        }
     }
 
     private var header: some View {
@@ -878,7 +895,7 @@ struct SettingsView: View {
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("风扇写（WMNB/EC）与灯光写（GHRGB kext）都依赖 root 助手，而 macOS 15 严格 SIP/AMFI 会拒绝加载 ad-hoc 签名的助手，导致「能读不能控」。安装时已自动把三件套写入所有 OpenCore 配置（含 U 盘）：debug=0x144（睿频开关）+ AMFI 放行（amfi_get_out_of_my_way=0x1 amfi=0x80）+ csr-active-config=430A0000，重启后即生效。每份改动前自动备份到 ~/Library/Application Support/GHelper/efi-backups/。")
+                Text("风扇写（WMNB/EC）与灯光写（GHRGB kext）都依赖 root 助手，而 macOS 15 严格 SIP/AMFI 会拒绝加载 ad-hoc 签名的助手，导致「能读不能控」。安装时会先扫描所有 OpenCore 配置（含 U 盘）并列出将要改动的文件，你点「确认添加」后才会写入三件套：debug=0x144（睿频开关）+ AMFI 放行 + csr-active-config=430A0000，重启后生效。未确认前 EFI 不会被改动；取消也没关系，随时可在这里补配。每份改动前自动备份到 ~/Library/Application Support/GHelper/efi-backups/。")
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
 
@@ -997,18 +1014,7 @@ struct SettingsView: View {
             }
         }
         .onAppear { model.helper.checkOCBootArg() }
-        .alert("配置系统前置", isPresented: $model.helper.bootArgPromptPending) {
-            Button("现在添加") { model.helper.previewBootArg() }
-            Button("稍后", role: .cancel) {}
-        } message: {
-            Text("风扇/灯光控制需要 OC 的 boot-args 加 AMFI 放行参数（amfi_get_out_of_my_way=0x1 amfi=0x80）+ csr-active-config=430A0000，睿频开关另需 debug=0x144。是否现在自动添加？会先列出将要修改的所有 OpenCore 配置供你确认，每份先备份 config.plist 再写入，修改后需重启生效。")
-        }
-        .alert("确认修改以下 EFI 配置", isPresented: $model.helper.bootArgConfirmPending) {
-            Button("确认添加") { model.helper.ensureBootArg() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text(model.helper.bootArgPreviewText)
-        }
+        // EFI 确认框已提到 RootView（见文件开头），此处只保留驱动补齐的确认框
         .alert("补齐缺失驱动", isPresented: $efiFixPending) {
             Button("现在补齐") { model.helper.installMissingKexts() }
             Button("稍后", role: .cancel) {}
@@ -1172,6 +1178,28 @@ struct PopoverDashboard: View {
             }
             .padding(12)
 
+            // 安装触发的 EFI 二次确认框挂在主窗口 RootView（弹层是独立视图树看不到）。
+            // 菜单栏用户若此时有待确认项，给一条明确提示 + 一键打开主窗口，避免「点了没反应」。
+            if model.helper.bootArgConfirmPending || model.helper.bootArgPromptPending {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10)).foregroundStyle(.orange)
+                        Text("有 EFI 启动参数配置等待你确认（尚未写入任何 EFI 文件）")
+                            .font(.system(size: 10)).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if showWindowAction != nil {
+                        Button("打开主窗口确认") { showWindowAction?() }
+                            .controlSize(.small)
+                    }
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.10))
+                .cornerRadius(8)
+                .padding(.horizontal, 12)
+            }
+
             if showWindowAction != nil {
                 Button { showWindowAction?() } label: {
                     Label("展开到独立窗口", systemImage: "macwindow")
@@ -1185,6 +1213,8 @@ struct PopoverDashboard: View {
             }
         }
         .frame(width: 320)
+        // 确认框统一由主窗口 RootView 承载（同一状态挂两处会双弹）。
+        // 弹层只负责提示 + 一键打开主窗口，打开后 RootView 的确认框即会出现。
     }
 
     private var gpuMiniCard: some View {
