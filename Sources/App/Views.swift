@@ -267,17 +267,19 @@ struct MonitorView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     BigStat(value: String(format: "%.0f", model.cpuUsage), unit: "%",
-                            caption: "总占用")
+                            caption: "全局负载")
                     Spacer()
                     if let f = model.cpuFrequencyMHz {
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(String(format: "%.2f", f / 1000))
                                 .font(.system(size: 18, weight: .semibold)).monospacedDigit()
-                            Text("GHz").font(.system(size: 10)).foregroundStyle(.secondary)
+                            Text("GHz · 实时频率").font(.system(size: 9)).foregroundStyle(.secondary)
                         }
                     } else {
-                        Text("频率 N/A")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text("频率 N/A").font(.system(size: 11)).foregroundStyle(.secondary)
+                            Text("需 root 助手").font(.system(size: 9)).foregroundStyle(.tertiary)
+                        }
                     }
                 }
                 MiniBar(value: model.cpuUsage / 100,
@@ -320,20 +322,39 @@ struct MonitorView: View {
     }
 
     private var coreCard: some View {
-        DashCard("CPU 核心占用 · \(Machine.physicalCores) 核 / \(Machine.logicalCores) 线程",
-                 accent: Brand.accent2) {
+        let s = model.coreSummary
+        return DashCard("CPU 线程占用 · \(Machine.physicalCores) 核 / \(Machine.logicalCores) 线程",
+                        accent: Brand.accent2) {
             VStack(alignment: .leading, spacing: 8) {
-                CoreGrid(loads: model.coreLoads, physical: Machine.physicalCores, cell: 19)
+                CoreGrid(loads: model.coreLoads,
+                         physical: Machine.physicalCores,
+                         cell: 19,
+                         pairing: model.corePairing,
+                         showLabel: true)
                 HStack(spacing: 10) {
-                    legend(Brand.accent, "低")
-                    legend(Brand.amber, "中")
-                    legend(Brand.danger, "高")
+                    legend(Brand.accent, "低 <55%")
+                    legend(Brand.amber, "中 55–85%")
+                    legend(Brand.danger, "高 ≥85%")
                     Spacer()
-                    let avg = model.coreLoads.isEmpty ? 0
-                                : model.coreLoads.reduce(0, +) / Double(model.coreLoads.count)
-                    Text(String(format: "平均 %.0f%%", avg))
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(model.corePairing.label)
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
                 }
+                Divider().padding(.vertical, 1)
+                HStack(spacing: 14) {
+                    Text(String(format: "峰值 %.0f%%", s.peak))
+                        .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                        .foregroundStyle(s.peak >= 85 ? Brand.danger : .primary)
+                    Text(String(format: "线程平均 %.0f%%", s.average))
+                        .font(.system(size: 10)).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "高载 %d/%d 线程", s.busy, s.total))
+                        .font(.system(size: 10)).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                Text("线程平均来自逐核采样；上方「总占用」是全局负载，算法不同故数值略有差异。")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -1185,13 +1206,17 @@ struct PopoverDashboard: View {
                         }
                         .frame(maxWidth: .infinity)
 
-                        // 右：占用 + 频率
-                        VStack(alignment: .leading, spacing: 6) {
-                            BigStat(value: String(format: "%.0f", model.cpuUsage), unit: "%",
-                                    caption: "占用")
+                        // 右：占用 + 频率（弹层窄，用紧凑字号，避免两个 30pt 大数字挤在一起）
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                                Text(String(format: "%.0f", model.cpuUsage))
+                                    .font(.system(size: 22, weight: .light)).monospacedDigit()
+                                Text("%").font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                            Text("全局负载").font(.system(size: 9)).foregroundStyle(.secondary)
                             if let f = model.cpuFrequencyMHz {
                                 Text(String(format: "%.2f GHz", f / 1000))
-                                    .font(.system(size: 18, weight: .semibold)).monospacedDigit()
+                                    .font(.system(size: 13, weight: .medium)).monospacedDigit()
                             }
                             MiniBar(value: model.cpuUsage / 100,
                                     color: model.cpuUsage > 80 ? Brand.danger
@@ -1202,11 +1227,27 @@ struct PopoverDashboard: View {
                     }
                 }
 
-                // 核心占用
-                DashCard("核心占用 · \(Machine.physicalCores)C/\(Machine.logicalCores)T",
+                // 核心占用（格子小，不显示线程号；tooltip 仍可看具体线程）
+                DashCard("线程占用 · \(Machine.physicalCores)C/\(Machine.logicalCores)T",
                          accent: Brand.accent2) {
-                    CoreGrid(loads: model.coreLoads, physical: Machine.physicalCores,
-                             cell: 12)
+                    let s = model.coreSummary
+                    VStack(alignment: .leading, spacing: 6) {
+                        CoreGrid(loads: model.coreLoads,
+                                 physical: Machine.physicalCores,
+                                 cell: 12,
+                                 pairing: model.corePairing)
+                        HStack(spacing: 8) {
+                            Text(String(format: "峰值 %.0f%%", s.peak))
+                                .font(.system(size: 9)).monospacedDigit()
+                                .foregroundStyle(s.peak >= 85 ? Brand.danger : .secondary)
+                            Text(String(format: "高载 %d/%d", s.busy, s.total))
+                                .font(.system(size: 9)).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(model.corePairing.label)
+                                .font(.system(size: 8)).foregroundStyle(.tertiary)
+                        }
+                    }
                 }
 
                 // WindowServer：紧凑一行，菜单栏里随手能看到

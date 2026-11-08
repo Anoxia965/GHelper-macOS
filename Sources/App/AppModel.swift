@@ -458,6 +458,19 @@ final class AppModel: ObservableObject, RGBBackend {
     /// 当前主温度（优先 CPU，其次 GPU），走势图/状态共用
     var primaryTemperature: Double? { cpuTemperature ?? gpuTemperature }
 
+    /// 逻辑线程网格的配对方式（Intel HT 交错 / AMD SMT 分半）
+    var corePairing: CorePairing { CorePairing.detect(from: Machine.cpu) }
+
+    /// 核心网格摘要：峰值、平均、高载线程数
+    var coreSummary: (peak: Double, average: Double, busy: Int, total: Int) {
+        let loads = coreLoads
+        guard !loads.isEmpty else { return (0, 0, 0, 0) }
+        return (loads.max() ?? 0,
+                loads.reduce(0, +) / Double(loads.count),
+                loads.filter { $0 >= 55 }.count,
+                loads.count)
+    }
+
     /// WindowServer 瞬时 CPU / 内存采样（后台执行，结果回主线程更新）
     private func sampleWindowServer() {
         windowServerMonitor.sampleAsync { [weak self] stats in

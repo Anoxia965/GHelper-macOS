@@ -202,11 +202,42 @@ struct StatusPill: View {
 
 // MARK: - CPU 核心 / 线程占用网格
 
-/// loads 长度 = 逻辑核数；physical = 物理核数 → 自动排成 physical 列 × 每核线程数行
+/// 逻辑线程编号与物理核的对应关系，两种 CPU 不一样：
+/// - Intel HT：同一核的两个线程编号相邻（0,1 / 2,3 …）→ `interleaved`，列 = 物理核、行 = 线程序号
+/// - AMD SMT（Ryzen）：前一半是各物理核的首线程、后一半是第二线程（0…n-1 / n…2n-1）→ `splitHalf`
+/// 选错会让「同一核两个线程」的分组看起来错位，所以按 CPU 品牌自动选，也允许 UI 显示出来。
+enum CorePairing {
+    case interleaved
+    case splitHalf
+
+    /// 把网格里的 (列 c, 行 r) 映射到 loads 的索引
+    func index(column c: Int, row r: Int, physical: Int, threads: Int) -> Int {
+        switch self {
+        case .interleaved: return c * threads + r
+        case .splitHalf:   return r * physical + c
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .interleaved: return "HT 交错编号"
+        case .splitHalf:   return "SMT 分半编号"
+        }
+    }
+
+    /// 按 CPU 品牌推断（本机 Ryzen 走 splitHalf；Intel 机型走 interleaved）。
+    /// 用纯 Swift String 的 lowercased/contains，不依赖 NSString 的隐式桥接。
+    static func detect(from brand: String) -> CorePairing {
+        brand.lowercased().contains("intel") ? .interleaved : .splitHalf
+    }
+}
+
+/// loads 长度 = 逻辑线程数；physical = 物理核数 → 排成 physical 列 × 每核线程数行
 struct CoreGrid: View {
     var loads: [Double]
     var physical: Int
     var cell: CGFloat = 17
+    var pairing: CorePairing = .splitHalf
     var showLabel: Bool = false
 
     private var threads: Int { max(loads.count / max(physical, 1), 1) }
@@ -216,9 +247,11 @@ struct CoreGrid: View {
             ForEach(0..<threads, id: \.self) { r in
                 HStack(spacing: 3) {
                     ForEach(0..<physical, id: \.self) { c in
-                        let idx = c * threads + r
+                        let idx = pairing.index(column: c, row: r,
+                                                physical: physical, threads: threads)
                         Cell(load: idx < loads.count ? loads[idx] : 0,
                              size: cell,
+                             index: idx,
                              label: showLabel ? "\(idx)" : nil)
                     }
                 }
@@ -229,21 +262,32 @@ struct CoreGrid: View {
     struct Cell: View {
         var load: Double
         var size: CGFloat
+        /// 真实逻辑线程编号（tooltip 用；不再依赖可选 label 反推）
+        var index: Int
         var label: String?
+
+        private var normalized: Double { min(1, max(0, load / 100)) }
 
         var body: some View {
             ZStack {
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(Color.core(load)
-                            .opacity(0.16 + 0.84 * min(1, max(0, load) / 100)))
+                    // 低负载时留 0.28 底色，避免深色主题下格子几乎看不见
+                    .fill(Color.core(load).opacity(0.28 + 0.72 * normalized))
+                // 细描边让每个格子边界清晰（浅色/深色都成立）
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
                 if let label = label {
                     Text(label)
-                        .font(.system(size: 7))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .font(.system(size: size >= 17 ? 8 : 7, weight: .medium))
+                        .monospacedDigit()
+                        // 低负载底色浅 → 用深色字；高负载底色深 → 用白字
+                        .foregroundStyle(normalized > 0.55
+                                         ? Color.white.opacity(0.92)
+                                         : Color.primary.opacity(0.62))
                 }
             }
             .frame(width: size, height: size)
-            .help(String(format: "线程 %d · %.0f%%", label.map { Int($0) ?? 0 } ?? 0, load))
+            .help(String(format: "线程 %d · %.0f%%", index, load))
         }
     }
 }
