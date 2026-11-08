@@ -10,7 +10,7 @@ BUILD="Build"
 APPDIR="$BUILD/$APP_NAME.app"
 CONTENTS="$APPDIR/Contents"
 
-SRC_SHARED="Sources/Shared/SMC.swift Sources/Shared/HelperProtocol.swift Sources/Shared/Sensors.swift Sources/Shared/Shell.swift Sources/Shared/CoreMonitor.swift Sources/Shared/AuraController.swift"
+SRC_SHARED="Sources/Shared/SMC.swift Sources/Shared/HelperProtocol.swift Sources/Shared/Sensors.swift Sources/Shared/Shell.swift Sources/Shared/CoreMonitor.swift Sources/Shared/AuraController.swift Sources/Shared/WindowServerMonitor.swift"
 
 # 兼容性：AMD 黑苹果均为 x86_64；明确指定部署目标 13.0（Ventura），
 # 否则 swiftc 默认按本机 SDK（macOS 26）锁定最低版本，Sequoia(15) 及以下会打不开。

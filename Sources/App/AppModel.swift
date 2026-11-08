@@ -46,6 +46,16 @@ final class AppModel: ObservableObject, RGBBackend {
     // CPU 每逻辑核心（线程）占用（0…100），长度 = 逻辑核数
     @Published var coreLoads: [Double] = []
 
+    // WindowServer 瞬时占用（黑苹果无硬件加速时的 CPU 大户）
+    @Published var windowServer = WindowServerStats()
+    /// 近 60 次采样的 CPU% 走势，供监控页迷你折线
+    @Published var windowServerHistory: [Double] = []
+    /// 菜单栏是否改显示 WindowServer 占用（默认关，保持原有温度显示）
+    @Published var showWindowServerInMenuBar: Bool = false {
+        didSet { UserDefaults.standard.set(showWindowServerInMenuBar,
+                                           forKey: Key.showWSInMenuBar) }
+    }
+
     // 风扇控制（每把扇独立：CPU 风扇 / GPU 风扇 各自一份）
     @Published var controls: [FanRole: FanControl] = [
         .cpu: FanControl(mode: .auto, tempSource: .cpuSMC, manualPercent: 55,
@@ -177,6 +187,8 @@ final class AppModel: ObservableObject, RGBBackend {
     private let smc = SMC.shared
     private let cpuMonitor = CPUMonitor()
     private let coreMonitor = CoreMonitor()
+    /// WindowServer 采样在监控类内部走后台串行队列，不卡主线程
+    private let windowServerMonitor = WindowServerMonitor()
     private var pollTimer: Timer?
     private var fanTimer: Timer?
     private var freqTimer: Timer?
@@ -214,7 +226,10 @@ final class AppModel: ObservableObject, RGBBackend {
 
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
+            self?.sampleWindowServer()
         }
+        // 立刻采一次基线，这样第二个 1.5s 周期就能出瞬时值
+        sampleWindowServer()
         fanTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.applyNow() }
         }
@@ -393,6 +408,10 @@ final class AppModel: ObservableObject, RGBBackend {
 
     /// 菜单栏标题：优先 GPU 温度，没有就退化成 CPU 占用
     var menuBarTitle: String {
+        // 可选：直接在菜单栏看 WindowServer 占用（无读数时退回温度）
+        if showWindowServerInMenuBar, windowServer.available {
+            return String(format: "WS %.0f%%", windowServer.cpuPercent)
+        }
         if let t = gpuTemperature { return String(format: "%.0f°", t) }
         if let t = cpuTemperature { return String(format: "%.0f°", t) }
         return String(format: "%.0f%%", cpuUsage)
@@ -438,6 +457,22 @@ final class AppModel: ObservableObject, RGBBackend {
 
     /// 当前主温度（优先 CPU，其次 GPU），走势图/状态共用
     var primaryTemperature: Double? { cpuTemperature ?? gpuTemperature }
+
+    /// WindowServer 瞬时 CPU / 内存采样（后台执行，结果回主线程更新）
+    private func sampleWindowServer() {
+        windowServerMonitor.sampleAsync { [weak self] stats in
+            Task { @MainActor in
+                guard let self else { return }
+                self.windowServer = stats
+                if stats.available {
+                    self.windowServerHistory.append(stats.cpuPercent)
+                    if self.windowServerHistory.count > 60 {
+                        self.windowServerHistory.removeFirst()
+                    }
+                }
+            }
+        }
+    }
 
     /// CPU 实时频率：走 root 助手（powermetrics 需要 root）。读不到时为 nil。
     func refreshFrequency() {
@@ -982,6 +1017,7 @@ final class AppModel: ObservableObject, RGBBackend {
         static let auraBrightness = "auraBrightness"
         static let auraSpeed = "auraSpeed"
         static let auraPerZone = "auraPerZone"
+        static let showWSInMenuBar = "showWindowServerInMenuBar"
     }
 
     private func save() {
@@ -1038,6 +1074,11 @@ final class AppModel: ObservableObject, RGBBackend {
 
         // 睿频模式：默认开启（跑满），仅当用户显式设过才覆盖
         if d.object(forKey: Key.boost) != nil { boostEnabled = d.bool(forKey: Key.boost) }
+
+        // 菜单栏显示 WindowServer：默认关闭，仅用户显式设过才覆盖
+        if d.object(forKey: Key.showWSInMenuBar) != nil {
+            showWindowServerInMenuBar = d.bool(forKey: Key.showWSInMenuBar)
+        }
 
         // 键盘灯光：仅当用户确实设过才覆盖默认值
         if let m = d.string(forKey: Key.auraMode), let am = AuraMode(rawValue: m) { auraMode = am }

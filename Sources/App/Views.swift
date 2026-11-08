@@ -179,9 +179,58 @@ struct MonitorView: View {
                 memCard.frame(maxWidth: .infinity)
             }
             coreCard
+            windowServerCard
             HStack(spacing: 12) {
                 gpuCard.frame(maxWidth: .infinity)
                 batteryMiniCard.frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// WindowServer：黑苹果没有完整硬件加速时最吃 CPU 的常驻进程
+    private var windowServerCard: some View {
+        let ws = model.windowServer
+        let color: Color = ws.cpuColorLevel == 2 ? Brand.danger
+                         : ws.cpuColorLevel == 1 ? Brand.amber : Brand.accent
+        return DashCard("WindowServer · 窗口合成", accent: color) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 16) {
+                    if ws.available {
+                        BigStat(value: String(format: "%.0f", ws.cpuPercent), unit: "%",
+                                caption: "CPU 瞬时占用", color: color)
+                    } else {
+                        BigStat(value: "—", unit: "%", caption: "采样中…")
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(String(format: "%.0f MB", ws.residentMB))
+                            .font(.system(size: 16, weight: .semibold)).monospacedDigit()
+                        Text("常驻内存").font(.system(size: 10)).foregroundStyle(.secondary)
+                        if let pid = ws.pid {
+                            Text("PID \(pid)").font(.system(size: 9)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if model.windowServerHistory.count > 1 {
+                    TrendChart(data: model.windowServerHistory, color: color, range: 0...160)
+                        .frame(height: 44)
+                    Text("近 \(model.windowServerHistory.count) 次采样 · 单核 100% 口径，多核可超过 100%")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                } else {
+                    Text("正在建立采样基线…")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                if ws.pid == nil {
+                    Text("未找到 WindowServer 进程")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                } else if ws.cpuColorLevel == 2 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10)).foregroundStyle(Brand.danger)
+                        Text("占用很高：通常是缺少硬件加速 / 高分辨率缩放导致")
+                            .font(.system(size: 10)).foregroundStyle(Brand.danger)
+                    }
+                }
             }
         }
     }
@@ -979,6 +1028,15 @@ struct SettingsView: View {
                     }
             }
 
+            DashCard("监控显示") {
+                Toggle("菜单栏显示 WindowServer 占用",
+                       isOn: $model.showWindowServerInMenuBar)
+                    .font(.system(size: 12))
+                Text("默认关：菜单栏继续显示 GPU/CPU 温度。打开后改为显示 WindowServer 的瞬时 CPU 占用（黑苹果无硬件加速时它常是 CPU 大户）。监控页与菜单栏弹层始终显示该项。")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             DashCard("硬件") {
                 StatRow(label: "机型", value: Machine.model)
                 StatRow(label: "处理器", value: Machine.cpu)
@@ -1149,6 +1207,27 @@ struct PopoverDashboard: View {
                          accent: Brand.accent2) {
                     CoreGrid(loads: model.coreLoads, physical: Machine.physicalCores,
                              cell: 12)
+                }
+
+                // WindowServer：紧凑一行，菜单栏里随手能看到
+                DashCard("WindowServer", accent: Brand.accent2) {
+                    let ws = model.windowServer
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(ws.available ? String(format: "%.0f", ws.cpuPercent) : "—")
+                            .font(.system(size: 20, weight: .light)).monospacedDigit()
+                            .foregroundStyle(ws.cpuColorLevel == 2 ? Brand.danger
+                                            : ws.cpuColorLevel == 1 ? Brand.amber : .primary)
+                        Text("% CPU").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(String(format: "%.0f MB", ws.residentMB))
+                            .font(.system(size: 11)).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    if model.windowServerHistory.count > 1 {
+                        TrendChart(data: model.windowServerHistory,
+                                   color: Brand.accent2, range: 0...160)
+                            .frame(height: 24)
+                    }
                 }
 
                 // 风扇环形（等宽居中，避免偏左留白）
