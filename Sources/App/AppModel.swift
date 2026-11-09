@@ -200,6 +200,8 @@ final class AppModel: ObservableObject, RGBBackend {
                                       "TC0J", "TCTL", "TCPU", "TC0C"]
 
     init() {
+        // 必须在调用任何 self 方法之前给 let 赋值
+        corePairing = CorePairing.detect(from: Machine.cpu)
         load()
         do { try smc.open() } catch { NSLog("SMC 打开失败: \(error)") }
         detectCPUTempKey()
@@ -458,8 +460,11 @@ final class AppModel: ObservableObject, RGBBackend {
     /// 当前主温度（优先 CPU，其次 GPU），走势图/状态共用
     var primaryTemperature: Double? { cpuTemperature ?? gpuTemperature }
 
-    /// 逻辑线程网格的配对方式（Intel HT 交错 / AMD SMT 分半）
-    var corePairing: CorePairing { CorePairing.detect(from: Machine.cpu) }
+    /// 逻辑线程网格的配对方式（Intel HT 交错 / AMD SMT 分半）。
+    /// ⚠️ 必须在 init 里算好存成常量：曾在视图 body 里实时计算（读 lazily 初始化的
+    /// `Machine.cpu`，其内部 spawn 进程），AttributeGraph 持锁期间触发
+    /// libdispatch 「trying to lock recursively」→ SIGILL 崩溃（2026-11-09 抓到）。
+    let corePairing: CorePairing
 
     /// 核心网格摘要：峰值、平均、高载线程数
     var coreSummary: (peak: Double, average: Double, busy: Int, total: Int) {

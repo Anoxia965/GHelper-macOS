@@ -249,16 +249,47 @@ final class HelperClient: ObservableObject {
           echo "rgbctl installed"
         fi
         if [ -d "$KEXT_SRC" ]; then
-          rm -rf /Library/Extensions/GHRGB.kext
-          cp -R "$KEXT_SRC" /Library/Extensions/GHRGB.kext
-          chown -R root:wheel /Library/Extensions/GHRGB.kext
-          KERR=$(mktemp /tmp/ghelper_kext.XXXXXX)
-          if kmutil load -p /Library/Extensions/GHRGB.kext -z 2>"$KERR"; then
-            echo "GHRGB kext loaded"
+          # ⚠️ 绝不能在 kext 已加载、且助手/App 还持有 IOUserClient 连接时直接
+          # rm -rf + cp + kmutil load：内核会卡在 "stalling for detach from GHRGB"，
+          # 旧实例半死不活，之后所有 IOServiceOpen 都返回 e00002c7（风扇曲线接管和
+          # 键盘 RGB 一起失效）。2026-11-09 踩过：App 更新后首次启动触发助手自动重装，
+          # 就是这个流程把 GHRGB 弄挂的，最后靠 kextunload + 重新 load 才恢复。
+          #
+          # 策略：
+          # ① 已加载且磁盘上的 kext 二进制与 App 包内一致 → 什么都不做（最常见，安全）；
+          # ② 已加载但二进制不同 → 先卸载旧实例，确认卸载后再替换并加载；
+          # ③ 未加载 → 直接替换并加载。
+          KEXT_DST=/Library/Extensions/GHRGB.kext
+          SRC_BIN="$KEXT_SRC/Contents/MacOS/GHRGB"
+          DST_BIN="$KEXT_DST/Contents/MacOS/GHRGB"
+          LOADED=0
+          kextstat 2>/dev/null | grep -q 'cn.anoxia.GHRGB' && LOADED=1
+          SAME=0
+          if [ -f "$SRC_BIN" ] && [ -f "$DST_BIN" ] && cmp -s "$SRC_BIN" "$DST_BIN"; then SAME=1; fi
+          if [ "$LOADED" = "1" ] && [ "$SAME" = "1" ]; then
+            echo "GHRGB kext 已加载且版本一致，跳过替换（避免 detach 卡死）"
           else
-            echo "KEXTMSG:GHRGB 未即时加载（正常现象）。请到『系统设置 ▸ 隐私与安全性』批准 GHRGB，再重启生效。详情: $(head -c 200 "$KERR" | tr '\n' ' ')"
+            if [ "$LOADED" = "1" ]; then
+              # 先释放内核里的旧实例；卸载失败就别动磁盘上的 kext，等重启
+              kextunload -b cn.anoxia.GHRGB >/dev/null 2>&1 || kmutil unload -b cn.anoxia.GHRGB >/dev/null 2>&1
+              sleep 1
+              if kextstat 2>/dev/null | grep -q 'cn.anoxia.GHRGB'; then
+                echo "KEXTMSG:GHRGB 旧实例无法卸载，未替换文件；请重启后再点『安装/重装』"
+              fi
+            fi
+            if ! kextstat 2>/dev/null | grep -q 'cn.anoxia.GHRGB'; then
+              /bin/rm -rf "$KEXT_DST" 2>/dev/null || true
+              cp -R "$KEXT_SRC" "$KEXT_DST"
+              chown -R root:wheel "$KEXT_DST"
+              KERR=$(mktemp /tmp/ghelper_kext.XXXXXX)
+              if kmutil load -p "$KEXT_DST" -z 2>"$KERR"; then
+                echo "GHRGB kext loaded"
+              else
+                echo "KEXTMSG:GHRGB 未即时加载（正常现象）。请到『系统设置 ▸ 隐私与安全性』批准 GHRGB，再重启生效。详情: $(head -c 200 "$KERR" | tr '\n' ' ')"
+              fi
+              /bin/rm -f "$KERR" 2>/dev/null || true
+            fi
           fi
-          rm -f "$KERR"
         fi
         cat > '\(kHelperPlistPath)' <<'PLISTEOF'
         \(plist)

@@ -1395,8 +1395,19 @@ enum Machine {
         return s.isEmpty ? "Mac" : s
     }()
 
+    /// CPU 品牌串。
+    /// ⚠️ 不用 `Shell.run`（spawn 子进程 + 管道读取）：曾在 SwiftUI body 里首次求值时触发
+    /// libdispatch 递归锁崩溃。sysctlbyname 是纯 C 调用，无子进程、无锁、微秒级。
     static let cpu: String = {
-        Shell.run("/usr/sbin/sysctl", ["-n", "machdep.cpu.brand_string"]) ?? "未知"
+        var size = 0
+        guard sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 0 else {
+            return "未知"
+        }
+        var buf = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("machdep.cpu.brand_string", &buf, &size, nil, 0) == 0 else {
+            return "未知"
+        }
+        return String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
     }()
 
     static let memoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory

@@ -68,17 +68,43 @@ fi
 cp "$SRC_RGBCTL" "$DST_RGBCTL"
 chmod 755 "$DST_RGBCTL"
 
-# ---- 5. GHRGB.kext（备份旧的，不删除）----
-echo "[install] 安装 GHRGB.kext → $DST_KEXT"
-if [ -d "$DST_KEXT" ]; then
-  mv "$DST_KEXT" "/Library/Extensions/GHRGB.kext.bak-$TS" 2>/dev/null \
-    || mv "$DST_KEXT" "/Library/Extensions/_bak_GHRGB_$TS"
+# ---- 5. GHRGB.kext（备份旧的，不删除；已加载且一致时跳过）----
+# ⚠️ kext 已加载时直接 mv + cp + load 会让内核卡在 "stalling for detach from GHRGB"，
+#    旧实例半死，之后所有 IOServiceOpen 返回 e00002c7（风扇曲线接管 + 键盘 RGB 一起失效）。
+#    策略与 App 内 install() 完全一致：一致就跳过，不同先卸载再替换。
+echo "[install] 检查 GHRGB.kext → $DST_KEXT"
+if [ -d "$SRC_KEXT" ]; then
+  SRC_BIN="$SRC_KEXT/Contents/MacOS/GHRGB"
+  DST_BIN="$DST_KEXT/Contents/MacOS/GHRGB"
+  LOADED=0
+  kextstat 2>/dev/null | grep -q 'cn.anoxia.GHRGB' && LOADED=1
+  SAME=0
+  if [ -f "$SRC_BIN" ] && [ -f "$DST_BIN" ] && cmp -s "$SRC_BIN" "$DST_BIN"; then SAME=1; fi
+  if [ "$LOADED" = "1" ] && [ "$SAME" = "1" ]; then
+    echo "[install] GHRGB 已加载且二进制一致 → 跳过替换（避免 detach 卡死）"
+  else
+    if [ "$LOADED" = "1" ]; then
+      echo "[install] GHRGB 已加载但二进制不同 → 先卸载旧实例"
+      kextunload -b cn.anoxia.GHRGB >/dev/null 2>&1 || kmutil unload -b cn.anoxia.GHRGB >/dev/null 2>&1
+      sleep 1
+    fi
+    if kextstat 2>/dev/null | grep -q 'cn.anoxia.GHRGB'; then
+      echo "[install] ⚠️ 旧实例仍无法卸载，未替换 kext 文件；重启后再装"
+    else
+      if [ -d "$DST_KEXT" ]; then
+        mv "$DST_KEXT" "/Library/Extensions/GHRGB.kext.bak-$TS" 2>/dev/null \
+          || mv "$DST_KEXT" "/Library/Extensions/_bak_GHRGB_$TS"
+      fi
+      cp -R "$SRC_KEXT" "$DST_KEXT"
+      chown -R root:wheel "$DST_KEXT"
+      chmod -R 755 "$DST_KEXT"
+      # 尝试立即加载（macOS 26 下通常需重启才真正生效，失败忽略）
+      kmutil load -p "$DST_KEXT" -z 2>/dev/null || echo "[install] kext 立即加载未成功（重启后生效），忽略"
+    fi
+  fi
+else
+  echo "[install] 跳过 GHRGB.kext（源缺失）"
 fi
-cp -R "$SRC_KEXT" "$DST_KEXT"
-chown -R root:wheel "$DST_KEXT"
-chmod -R 755 "$DST_KEXT"
-# 尝试立即加载（macOS 26 下通常需重启才真正生效，失败忽略）
-kmutil load -p "$DST_KEXT" -z 2>/dev/null || echo "[install] kext 立即加载未成功（重启后生效），忽略"
 
 # ---- 6. LaunchDaemon plist ----
 echo "[install] 写 plist → $PLIST"
