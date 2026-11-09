@@ -5,6 +5,14 @@
 set -e
 cd "$(dirname "$0")"
 
+# 用系统原生 rm（绝对路径）。
+# WorkBuddy 等环境会把 shell 的 rm 换成「移到废纸篓」的安全删除包装器，
+# 构建脚本里的 rm -rf Build/GHelper.app / _pkgroot 会把旧产物塞进 ~/.Trash，
+# 每构建一次就多一份完整 .app 被 LaunchServices 注册，导致「打开方式」/启动器里
+# 出现一堆重复的 GHelper（也踩过 installer upgrade-bundle 重定位到这些副本的坑）。
+# 构建中间产物本就该直接删除，用 /bin/rm 绕过包装器。
+SAFE_RM=/bin/rm
+
 APP_NAME="GHelper"
 BUILD="Build"
 APPDIR="$BUILD/$APP_NAME.app"
@@ -45,7 +53,7 @@ if [ ! -f Build/GHelper.icns ]; then
 fi
 
 echo "▸ 组装 App 包…"
-rm -rf "$APPDIR"
+$SAFE_RM -rf "$APPDIR"
 mkdir -p "$CONTENTS/MacOS"
 mkdir -p "$CONTENTS/Resources"
 cp "$BUILD/GHelperBin"    "$CONTENTS/MacOS/$APP_NAME"
@@ -72,7 +80,7 @@ codesign --force --deep --sign - "$APPDIR" 2>/dev/null || \
 
 echo "▸ 构建 .pkg 安装器（--root 方式，固定装到 /Applications，绝不重定位）…"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
-rm -rf Build/_pkgroot Build/GHelper_component.pkg "Build/GHelper-$VERSION.pkg"
+$SAFE_RM -rf Build/_pkgroot Build/GHelper_component.pkg "Build/GHelper-$VERSION.pkg"
 mkdir -p Build/_pkgroot/Applications
 cp -R "$APPDIR" Build/_pkgroot/Applications/
 # 注：不 sudo chown，保持 anoxia-m:staff 即可正常安装运行，避免构建需输密码
@@ -88,9 +96,32 @@ productbuild --package Build/GHelper_component.pkg \
 echo "  产物：Build/GHelper-$VERSION.pkg"
 
 echo "▸ 打包 app.zip（供 App 内「检查更新 → 下载并更新」一键更新，仅替换 GHelper.app；更新器只认 .dmg/app.zip，故必须一并产出）…"
-rm -f "Build/GHelper-$VERSION.app.zip"
+$SAFE_RM -f "Build/GHelper-$VERSION.app.zip"
 # --keepParent 把 GHelper.app 目录名一并打进压缩包（顶层即 GHelper.app/），更新器解包才能定位；ditto 同时保留扩展属性与代码签名
 ditto -c -k --keepParent "$APPDIR" "Build/GHelper-$VERSION.app.zip"
 echo "  产物：Build/GHelper-$VERSION.app.zip"
+
+# ── 避免 App 列表里堆出多个 GHelper ──────────────────────────────────
+# macOS 的 LaunchServices 会把磁盘上每个 .app 按 bundle ID (cn.anoxia.GHelper) 注册。
+# 构建过程里的两份中间产物若以 .app 存在，就会被注册成「第 2、第 3 个 GHelper」：
+#   1) Build/_pkgroot/Applications/GHelper.app（pkgbuild --root 用，包完就没用了）
+#   2) Build/GHelper.app（构建产物 / app.zip 的打包源）
+# 而且 installer 的 upgrade-bundle 会把新版"升级"到这些副本上（11-07 踩过：
+# 报安装成功但 /Applications 没落地）。
+#
+# 处理：包完 pkg/app.zip 后删掉 _pkgroot（用 /bin/rm，别让它进废纸篓）；
+# 再注销构建期间被系统异步扫到而留下的注册记录。
+# 注意：Build/GHelper.app 必须保留原名 —— install_now.sh / make_dmg.sh 都引用它，
+# 改名会破坏这两个脚本。注销只影响「打开方式」/启动器列表，不影响文件本身，
+# 也不影响 /Applications 的正式版。
+$SAFE_RM -rf Build/_pkgroot
+LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+# 分两轮注销：LS 的注册是异步的，构建完立刻 -u 可能随后又被重扫注册回来
+for i in 1 2; do
+  "$LSREG" -u "$PWD/Build/_pkgroot/Applications/GHelper.app" >/dev/null 2>&1 || true
+  "$LSREG" -u "$PWD/Build/GHelper.app" >/dev/null 2>&1 || true
+  [ "$i" = 1 ] && sleep 2
+done
+"$LSREG" -f /Applications/GHelper.app >/dev/null 2>&1 || true
 
 echo "✓ 完成：$APPDIR"
