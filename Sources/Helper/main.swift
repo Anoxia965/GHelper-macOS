@@ -7,12 +7,74 @@
 
 import Foundation
 import SystemConfiguration
+import IOKit
+
+/// 与 GHRGB kext 常驻一个 IOUserClient 连接（不再每条命令都 spawn rgbctl 去开关连接）。
+/// 之前每次命令都开/关一次连接，频繁改灯 + 风扇 WMNB 叠加时会把 EC 信箱冲挂
+/// （IOServiceOpen e00002c7，2026-11-09 真机）。常驻连接 + 单锁串行化，彻底消除该 churn。
+final class GHRGBClient {
+    private var conn: io_connect_t = 0
+    private let lock = NSLock()
+    private var poisoned = false
+
+    /// 取可用连接；失败则关闭并重建一次（kext 被重载等情况）
+    private func withConnection<T>(_ body: (io_connect_t) -> T) -> T? {
+        lock.lock(); defer { lock.unlock() }
+        if conn == 0 || poisoned {
+            if conn != 0 { IOServiceClose(conn); conn = 0 }
+            let svc = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("GHRGB"))
+            guard svc != 0 else { return nil }
+            let kr = IOServiceOpen(svc, mach_task_self_, 0, &conn)
+            IOObjectRelease(svc)
+            guard kr == KERN_SUCCESS, conn != 0 else { conn = 0; return nil }
+            poisoned = false
+        }
+        return body(conn)
+    }
+
+    func setRGB(mode: UInt8, r: UInt8, g: UInt8, b: UInt8, speed: UInt8) -> Bool {
+        guard let c = withConnection({ $0 }) else { return false }
+        var inArr = [UInt64(mode), UInt64(r), UInt64(g), UInt64(b), UInt64(speed)]
+        var out: UInt64 = 0; var outCnt: UInt32 = 0
+        let kr = IOConnectCallScalarMethod(c, 0, &inArr, 5, &out, &outCnt)
+        if kr != KERN_SUCCESS { poisoned = true; return false }
+        return true
+    }
+
+    func setBrightness(_ level: UInt8) -> Bool {
+        guard let c = withConnection({ $0 }) else { return false }
+        var inArr = [UInt64(UInt32(level) & 0x0F)]
+        var out: UInt64 = 0; var outCnt: UInt32 = 0
+        let kr = IOConnectCallScalarMethod(c, 1, &inArr, 1, &out, &outCnt)
+        if kr != KERN_SUCCESS { poisoned = true; return false }
+        return true
+    }
+
+    /// 通用 WMNB。输出最多 16 字节。返回 (成功, 输出字节)
+    func callWMNB(sig: UInt32, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32) -> (Bool, [UInt8]) {
+        guard let c = withConnection({ $0 }) else { return (false, []) }
+        var inArr = [UInt64(sig), UInt64(devid), UInt64(a1), UInt64(a2), UInt64(a3), UInt64(a4)]
+        var outBuf = [UInt8](repeating: 0, count: 16)
+        var outCnt: Int = outBuf.count
+        let kr = IOConnectCallStructMethod(c, 4, &inArr, MemoryLayout<UInt64>.stride * 6, &outBuf, &outCnt)
+        if kr != KERN_SUCCESS { poisoned = true; return (false, []) }
+        if outCnt < 16 { outBuf.removeSubrange(outCnt..<16) }
+        return (true, outBuf)
+    }
+
+    func close() {
+        lock.lock(); defer { lock.unlock() }
+        if conn != 0 { IOServiceClose(conn); conn = 0 }
+    }
+}
 
 private let kWatchdogSeconds: TimeInterval = 15
 
 final class HelperService: NSObject, HelperProtocol {
 
     private let smc = SMC.shared
+    /// GHRGB kext 常驻连接（键盘灯 + 风扇曲线共用，单锁串行化，避免冲挂 EC 信箱）
+    private let gh = GHRGBClient()
     private var lastCommand = Date()
     private var watchdogTimer: Timer?
     private var manualFans: Set<Int> = []
@@ -69,12 +131,10 @@ final class HelperService: NSObject, HelperProtocol {
 
     // MARK: WMNB 风扇曲线
 
-    /// 把 rgbctl wmnb DSTS 返回的 16 字节解析为 4 个 uint32（小端）——与写入打包格式一致
-    private func parseCurveBytes(_ text: String) -> (UInt32, UInt32, UInt32, UInt32)? {
-        let parts = text.split(separator: " ")
-        let hex = parts.compactMap { UInt8($0, radix: 16) }
-        guard hex.count >= 16 else { return nil }
-        let b = Array(hex.suffix(16))
+    /// 把 WMNB DSTS 返回的 16 字节解析为 4 个 uint32（小端）——与写入打包格式一致
+    private func parseCurveBytes(_ bytes: [UInt8]) -> (UInt32, UInt32, UInt32, UInt32)? {
+        guard bytes.count >= 16 else { return nil }
+        let b = Array(bytes.suffix(16))
         let u32: (Int) -> UInt32 = { i in
             UInt32(b[i]) | (UInt32(b[i + 1]) << 8) | (UInt32(b[i + 2]) << 16) | (UInt32(b[i + 3]) << 24)
         }
@@ -84,12 +144,9 @@ final class HelperService: NSObject, HelperProtocol {
     private func releaseAllWMNB() {
         for i in wmnbFans {
             if let fac = wmnbFactory[i] {
-                let _ = runRGBCTL([
-                    "wmnb", "0x53564544", String(format: "0x%x", fac.devid),
-                    String(format: "0x%x", fac.a1), String(format: "0x%x", fac.a2),
-                    String(format: "0x%x", fac.a3), String(format: "0x%x", fac.a4)
-                ])
-                NSLog("[GHelper Helper] fan\(i) 写回出厂曲线")
+                let (ok, _) = gh.callWMNB(sig: 0x53564544, devid: fac.devid,
+                                          a1: fac.a1, a2: fac.a2, a3: fac.a3, a4: fac.a4)
+                NSLog("[GHelper Helper] fan\(i) 写回出厂曲线 ok=\(ok)")
             } else {
                 // 没缓存出厂曲线：退回 SMC 交回
                 do { try smc.writeUInt8("F\(i)Md", 0) } catch {}
@@ -102,13 +159,9 @@ final class HelperService: NSObject, HelperProtocol {
     func callWMNB(sig: UInt32, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32,
                   reply: @escaping (Bool, String) -> Void) {
         touch()
-        let (ok, msg) = runRGBCTL([
-            "wmnb",
-            String(format: "0x%x", sig), String(format: "0x%x", devid),
-            String(format: "0x%x", a1), String(format: "0x%x", a2),
-            String(format: "0x%x", a3), String(format: "0x%x", a4)
-        ])
-        reply(ok, msg)
+        let (ok, out) = gh.callWMNB(sig: sig, devid: devid, a1: a1, a2: a2, a3: a3, a4: a4)
+        let msg = out.map { String(format: "%02x", $0) }.joined(separator: " ")
+        reply(ok, ok ? msg : "WMNB 调用失败（GHRGB 未加载或连接异常）")
     }
 
     func setFanCurve(_ index: Int, devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32,
@@ -116,39 +169,31 @@ final class HelperService: NSObject, HelperProtocol {
         touch()
         // 1) 首次接管该扇：先读出厂曲线缓存，供看门狗/交回写回
         if wmnbFactory[index] == nil {
-            let (okRead, readText) = runRGBCTL([
-                "wmnb", "0x53545344", String(format: "0x%x", devid), "0", "0", "0", "0"])
-            if okRead, let fac = parseCurveBytes(readText) {
+            let (okRead, out) = gh.callWMNB(sig: 0x53545344, devid: devid, a1: 0, a2: 0, a3: 0, a4: 0)
+            if okRead, let fac = parseCurveBytes(out) {
                 wmnbFactory[index] = (devid, fac.0, fac.1, fac.2, fac.3)
                 NSLog("[GHelper Helper] fan\(index) 缓存出厂曲线 devid=0x\(String(format: "%x", devid))")
             } else {
-                NSLog("[GHelper Helper] fan\(index) 读取出厂曲线失败：\(readText)")
+                NSLog("[GHelper Helper] fan\(index) 读取出厂曲线失败")
             }
         }
         // 2) 写自定义曲线接管
-        let (ok, msg) = runRGBCTL([
-            "wmnb", "0x53564544", String(format: "0x%x", devid),
-            String(format: "0x%x", a1), String(format: "0x%x", a2),
-            String(format: "0x%x", a3), String(format: "0x%x", a4)
-        ])
+        let (ok, _) = gh.callWMNB(sig: 0x53564544, devid: devid, a1: a1, a2: a2, a3: a3, a4: a4)
         if ok {
             wmnbFans.insert(index)
             reply(true, "已接管风扇曲线（devid=0x\(String(format: "%x", devid))）")
         } else {
-            reply(false, msg)
+            reply(false, "写入风扇曲线失败（GHRGB 未加载或连接异常）")
         }
     }
 
     func releaseFanCurve(_ index: Int, reply: @escaping (Bool, String) -> Void) {
         touch()
         if let fac = wmnbFactory[index] {
-            let (ok, msg) = runRGBCTL([
-                "wmnb", "0x53564544", String(format: "0x%x", fac.devid),
-                String(format: "0x%x", fac.a1), String(format: "0x%x", fac.a2),
-                String(format: "0x%x", fac.a3), String(format: "0x%x", fac.a4)
-            ])
+            let (ok, _) = gh.callWMNB(sig: 0x53564544, devid: fac.devid,
+                                      a1: fac.a1, a2: fac.a2, a3: fac.a3, a4: fac.a4)
             wmnbFans.remove(index)
-            reply(ok, ok ? "已交回出厂曲线" : msg)
+            reply(ok, ok ? "已交回出厂曲线" : "交回出厂曲线失败（GHRGB 未加载或连接异常）")
         } else {
             do {
                 try smc.writeUInt8("F\(index)Md", 0)
@@ -431,32 +476,7 @@ final class HelperService: NSObject, HelperProtocol {
         }
     }
 
-    // MARK: - 键盘 RGB（GHRGB kext → rgbctl，需 root）
-
-    /// rgbctl 安装位置（由 App「安装/重装」时从包内拷到此处，或由本机手动安装）
-    private let rgbctlPath = "/usr/local/bin/rgbctl"
-
-    /// 跑一次 rgbctl，返回 (成功?, 标准输出/错误)
-    private func runRGBCTL(_ args: [String]) -> (Bool, String) {
-        guard FileManager.default.isExecutableFile(atPath: rgbctlPath) else {
-            return (false, "rgbctl 未安装（\(rgbctlPath) 不存在）。请在 GHelper 设置页点「安装/重装」")
-        }
-        let task = Process()
-        task.launchPath = rgbctlPath
-        task.arguments = args
-        let out = Pipe(), err = Pipe()
-        task.standardOutput = out
-        task.standardError = err
-        do { try task.run() } catch {
-            return (false, "rgbctl 启动失败: \(error.localizedDescription)")
-        }
-        task.waitUntilExit()
-        let o = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let text = (o + e).trimmingCharacters(in: .whitespacesAndNewlines)
-        let ok = task.terminationStatus == 0
-        return (ok, ok ? text : text)
-    }
+    // MARK: - 键盘 RGB（GHRGB kext，经常驻 IOUserClient 下发，需 root）
 
     func applyKeyboardLighting(r: Int, g: Int, b: Int, mode: Int,
                               brightness: Int, speed: Int,
@@ -469,19 +489,15 @@ final class HelperService: NSObject, HelperProtocol {
         let sp = min(max(speed, 0), 255)
         let lvl = min(max(brightness, 0), 15)
 
-        let (okSet, msgSet) = runRGBCTL(["set", "\(mm)", "\(rr)", "\(gg)", "\(bb)", "\(sp)"])
+        let okSet = gh.setRGB(mode: UInt8(mm), r: UInt8(rr), g: UInt8(gg), b: UInt8(bb), speed: UInt8(sp))
         guard okSet else {
-            reply(false, msgSet)
+            reply(false, "键盘灯光写 RGB 失败（GHRGB 未加载或连接异常）")
             return
         }
-        let (okBright, msgBright) = runRGBCTL(["bright", "\(lvl)"])
+        let okBright = gh.setBrightness(UInt8(lvl))
         let ok = okSet && okBright
         let detail = "颜色(\(rr),\(gg),\(bb)) 亮度\(lvl)（\(ok ? "成功" : "失败")）"
-        if ok {
-            reply(true, detail)
-        } else {
-            reply(false, "\(detail) · \(msgBright)")
-        }
+        reply(ok, detail)
     }
 
     func uninstall(reply: @escaping (Bool, String) -> Void) {

@@ -102,30 +102,40 @@ final class AppModel: ObservableObject, RGBBackend {
     @Published var auraAvailable: Bool = false
     @Published var auraStatus: String = "未检测"
 
+    /// 灯光下发去抖：调色 / 拖滑块会瞬间冒出十几条变更，逐条下发会 flood 住与风扇共用的
+    /// ATKD EC 信箱，把 GHRGB 冲挂（IOServiceOpen e00002c7）。改成静默 0.25s 后只下发最终值。
+    private var lightingDebounce: DispatchWorkItem?
+    private func scheduleLightingApply() {
+        lightingDebounce?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.applyLighting() }
+        lightingDebounce = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+
     @Published var auraMode: AuraMode = .staticColor {
-        didSet { saveLighting(); applyLighting() }
+        didSet { saveLighting(); scheduleLightingApply() }
     }
     @Published var auraColor = Color(rgb: 0x1D9E75) {
-        didSet { saveLighting(); applyLighting() }
+        didSet { saveLighting(); scheduleLightingApply() }
     }
     @Published var auraColor2 = Color(rgb: 0x5DCAA5) {
-        didSet { saveLighting(); applyLighting() }
+        didSet { saveLighting(); scheduleLightingApply() }
     }
     /// 四区颜色（FA607 为四区 RGB 键盘）
     @Published var auraZones: [Color] = [
         Color(rgb: 0x1D9E75), Color(rgb: 0x5DCAA5),
         Color(rgb: 0xE0A23A), Color(rgb: 0xD9544B)
     ] {
-        didSet { saveLighting(); applyLighting() }
+        didSet { saveLighting(); scheduleLightingApply() }
     }
     @Published var auraBrightness: Int = 2 {
-        didSet { saveLighting(); applyLighting() }
+        didSet { saveLighting(); scheduleLightingApply() }
     }
     @Published var auraSpeed: Int = 2 {
-        didSet { saveLighting(); applyLighting() }
+        didSet { saveLighting(); scheduleLightingApply() }
     }
     @Published var auraPerZone: Bool = false {
-        didSet { saveLighting(); applyLighting() }
+        didSet { saveLighting(); scheduleLightingApply() }
     }
 
     /// Color → RRGGBB 整数（持久化用）
@@ -363,6 +373,7 @@ final class AppModel: ObservableObject, RGBBackend {
             auraStatus = aura.statusMessage
             return
         }
+        lightingDebounce?.cancel()   // 显式应用（按钮）优先于去抖中的待发指令
         aura.apply(mode: auraMode, color: rgbTuple(auraColor), color2: rgbTuple(auraColor2),
                    brightness: auraBrightness, speed: auraSpeed, perZone: auraPerZone,
                    zones: auraZones.map { rgbTuple($0) })
