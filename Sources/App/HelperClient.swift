@@ -201,6 +201,11 @@ final class HelperClient: ObservableObject {
                                    reply: completion)
     }
 
+    /// 电池养护（充电上限 80%）。enabled=true 钉 80%，false 解除。
+    func setChargeLimit(enabled: Bool, completion: @escaping (Bool, String) -> Void) {
+        proxy()?.setChargeLimit(enabled: enabled, reply: completion)
+    }
+
     // MARK: 安装
 
     /// 用 osascript 弹系统密码框，一次性把助手装进去

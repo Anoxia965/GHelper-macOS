@@ -70,6 +70,12 @@ let kHelperPlistPath = "/Library/LaunchDaemons/cn.anoxia.GHelper.helper.plist"
     /// 维持 WMNB 风扇看门狗心跳（不改变曲线，仅刷新 lastCommand，防止 App 活着却被误回收）。
     func keepFanAlive(_ index: Int, reply: @escaping (Bool, String) -> Void)
 
+    /// 电池养护（充电上限 80%）。经 GHRGB kext → ACPI WMNB devid 0x00120057：
+    /// enabled=true → arg1=80（DSDT: arg1<=0x50 写 BH30=0x50，钉 80%）；false → arg1=100（>0x50 清上限）。
+    /// EC 每次冷启动会复位成 100%，所以助手在 LaunchDaemon 启动(开机)与唤醒时会按存储的偏好重涂。
+    /// 返回 (是否成功, 描述)。GHRGB 未加载时返回失败并附带指引。
+    func setChargeLimit(enabled: Bool, reply: @escaping (Bool, String) -> Void)
+
     /// 助手自报版本（与安装它的 App 版本一致）。读不到返回 "0"，便于 App 判断是否需要重装。
     /// 由 App 内「安装/重装」/install_now 写入 /Library/PrivilegedHelperTools/.ghelper-helper-version。
     func helperVersion(reply: @escaping (String) -> Void)

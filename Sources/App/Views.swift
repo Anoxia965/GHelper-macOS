@@ -780,6 +780,21 @@ struct BatteryView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+                DashCard("电池养护 · 充电上限 80%") {
+                    Toggle("开启电池养护（钉 80% 上限）", isOn: Binding(
+                        get: { model.chargeLimit80 },
+                        set: { model.setChargeLimit(enabled: $0) }))
+                        .toggleStyle(.switch)
+                        .font(.system(size: 12))
+                    if !model.chargeLimitStatus.isEmpty {
+                        Text(model.chargeLimitStatus)
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("经 root 助手写 ACPI WMNB（devid 0x00120057）。EC 冷启动会复位，助手开机即自动重涂。本机实测只支持 80% 一档，非 60/80/100 三档。")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

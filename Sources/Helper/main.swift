@@ -83,6 +83,9 @@ final class HelperService: NSObject, HelperProtocol {
     private var wmnbFans: Set<Int> = []
     private var wmnbFactory: [Int: (devid: UInt32, a1: UInt32, a2: UInt32, a3: UInt32, a4: UInt32)] = [:]
 
+    // 电池养护（充电上限 80%）偏好：助手以 root 持久化，供开机/唤醒重涂（App 不在时也能生效）
+    private let kChargeLimitPath = "/Library/Application Support/GHelper/chargeLimitEnabled"
+
     override init() {
         super.init()
         do {
@@ -92,6 +95,37 @@ final class HelperService: NSObject, HelperProtocol {
             NSLog("[GHelper Helper] SMC 打开失败: \(error)")
         }
         startWatchdog()
+        // EC 每次冷启动会复位成 100%，开机即按存储偏好重涂（kext 未起则静默跳过，App 启动时会再补）
+        if storedChargeLimit() {
+            let (ok, _) = gh.callWMNB(sig: 0x53564544, devid: 0x00120057, a1: 80, a2: 0, a3: 0, a4: 0)
+            NSLog("[GHelper Helper] 开机重涂电池养护 ok=\(ok)")
+        }
+    }
+
+    // MARK: 电池养护（充电上限 80%）
+
+    private func persistChargeLimit(_ on: Bool) {
+        let dir = (kChargeLimitPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? "\(on ? 1 : 0)".write(toFile: kChargeLimitPath, atomically: true, encoding: .utf8)
+    }
+
+    private func storedChargeLimit() -> Bool {
+        (try? String(contentsOfFile: kChargeLimitPath, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+    }
+
+    func setChargeLimit(enabled: Bool, reply: @escaping (Bool, String) -> Void) {
+        touch()
+        persistChargeLimit(enabled)
+        // DSDT: arg1<=0x50 写 BH30=0x50（钉 80%）；arg1>0x50 清上限
+        let a1: UInt32 = enabled ? 80 : 100
+        let (ok, _) = gh.callWMNB(sig: 0x53564544, devid: 0x00120057, a1: a1, a2: 0, a3: 0, a4: 0)
+        if ok {
+            reply(true, enabled ? "已开启电池养护（充电上限 80%）" : "已关闭电池养护（解除 80% 上限）")
+        } else {
+            reply(false, "写入充电上限失败（GHRGB 未加载或连接异常）")
+        }
     }
 
     // MARK: 看门狗

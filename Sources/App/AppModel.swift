@@ -67,6 +67,13 @@ final class AppModel: ObservableObject, RGBBackend {
         NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
     }
 
+    /// 电池养护（充电上限 80%）。默认关；开 = 钉 80%，关 = 解除上限。
+    @Published var chargeLimit80: Bool = false {
+        didSet { UserDefaults.standard.set(chargeLimit80, forKey: Key.chargeLimit80) }
+    }
+    /// 电池养护操作回显（成功/失败信息）
+    @Published var chargeLimitStatus: String = ""
+
     /// 退出 App。菜单栏模式下 Dock 图标消失，需在 popover / 设置里提供显式退出入口。
     func quit() { NSApp.terminate(nil) }
 
@@ -335,6 +342,10 @@ final class AppModel: ObservableObject, RGBBackend {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.applyBoostOnLaunch()
         }
+        // 启动后按已存偏好重涂电池养护（助手装好才生效；助手自身也会在开机/唤醒时重涂）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            self?.applyChargeLimitOnLaunch()
+        }
         loadProfiles()
         // 首次启动（无档案）且助手就绪时，自动测绘一次风扇能力，用于后续限速/稳态判定。
         // 用 scheduleProbeIfNeeded：条件未就绪会自动重试，避免一次性竞态导致永久跳过。
@@ -367,6 +378,34 @@ final class AppModel: ObservableObject, RGBBackend {
                 guard let self = self else { return }
                 self.lastApplyMessage = "睿频：\(msg)"
                 self.boostStatus = ok ? "✓ \(msg)" : "✗ \(msg)"
+            }
+        }
+    }
+
+    // MARK: 电池养护（充电上限 80%）
+
+    /// 用户切换开关时调用：更新偏好并立即下发
+    func setChargeLimit(enabled: Bool) {
+        chargeLimit80 = enabled
+        applyChargeLimitNow()
+    }
+
+    /// 启动时按已存偏好重涂（不打扰用户）
+    func applyChargeLimitOnLaunch() {
+        guard helper.isInstalled else { return }
+        applyChargeLimitNow()
+    }
+
+    private func applyChargeLimitNow() {
+        guard helper.isInstalled else {
+            chargeLimitStatus = "需先安装特权助手"
+            return
+        }
+        chargeLimitStatus = "应用中…"
+        helper.setChargeLimit(enabled: chargeLimit80) { [weak self] ok, msg in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.chargeLimitStatus = ok ? "✓ \(msg)" : "✗ \(msg)"
             }
         }
     }
@@ -1062,6 +1101,7 @@ final class AppModel: ObservableObject, RGBBackend {
         static let auraPerZone = "auraPerZone"
         static let showWSInMenuBar = "showWindowServerInMenuBar"
         static let showInDock = "showInDock"
+        static let chargeLimit80 = "chargeLimit80"
     }
 
     private func save() {
@@ -1127,6 +1167,11 @@ final class AppModel: ObservableObject, RGBBackend {
         // 在程序坞显示图标：默认关（纯菜单栏），仅用户显式设过才覆盖
         if d.object(forKey: Key.showInDock) != nil {
             showInDock = d.bool(forKey: Key.showInDock)
+        }
+
+        // 电池养护（充电上限 80%）：默认关，仅用户显式设过才覆盖
+        if d.object(forKey: Key.chargeLimit80) != nil {
+            chargeLimit80 = d.bool(forKey: Key.chargeLimit80)
         }
 
         // 键盘灯光：仅当用户确实设过才覆盖默认值
