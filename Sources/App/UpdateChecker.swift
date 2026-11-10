@@ -265,16 +265,21 @@ final class UpdateInstaller: ObservableObject {
                     sourceApp = a
                 }
 
-                // 3) 删掉旧安装（移到废纸篓）→ 装新版
-                phase = .working("正在替换旧版本…")
+                // 3) 以 root 身份替换旧安装（解决 root-owned 无法移废纸篓的问题；需输入密码）
+                phase = .working("正在替换旧版本（需要输入密码）…")
                 let target = Self.installTarget
-                try Self.replaceInstall(at: target, with: sourceApp)
+                let (ok, msg) = await withCheckedContinuation { cont in
+                    AppModel.shared.helper.replaceAppPrivileged(source: sourceApp) { success, text in
+                        cont.resume(returning: (success, text))
+                    }
+                }
+                guard ok else { throw InstallError.replaceFailed(msg) }
 
                 // 4) 清理临时文件
                 for d in tempDirs { Self.unmountOrRemove(d) }
                 try? FileManager.default.removeItem(at: pkg)
 
-                phase = .done("已更新到 \(release.tagName)。旧安装已移到废纸篓。助手将在下次启动时自动同步（或点「设置 ▸ 安装/重装」）。")
+                phase = .done("已更新到 \(release.tagName)。旧安装已备份到 『/Library/Application Support/GHelper/OldInstalls/』。助手将在下次启动时自动同步（或点「设置 ▸ 安装/重装」）。")
 
                 if relaunch {
                     phase = .done("已更新到 \(release.tagName)，正在重启…")
@@ -295,21 +300,6 @@ final class UpdateInstaller: ObservableObject {
     nonisolated static var installTarget: URL {
         let cur = URL(fileURLWithPath: Bundle.main.bundlePath)
         return cur.deletingLastPathComponent().appendingPathComponent("GHelper.app")
-    }
-
-    /// 把旧安装移到废纸篓（等价“自动删除旧安装”，可恢复），再把新 App 拷进去
-    nonisolated static func replaceInstall(at target: URL, with newApp: URL) throws {
-        let fm = FileManager.default
-        try? fm.createDirectory(at: target.deletingLastPathComponent(),
-                                withIntermediateDirectories: true)
-        // ① 删除旧安装：移到废纸篓
-        if fm.fileExists(atPath: target.path) {
-            try fm.trashItem(at: target, resultingItemURL: nil)
-        }
-        // ② 装新
-        try fm.copyItem(at: newApp, to: target)
-        // ③ 去掉隔离属性，避免 Gatekeeper 拦截
-        stripQuarantine(at: target)
     }
 
     /// 在解开的目录里找 GHelper.app（含一层子目录）
@@ -368,13 +358,6 @@ final class UpdateInstaller: ObservableObject {
         if p.terminationStatus != 0 { throw InstallError.unzipFailed }
     }
 
-    nonisolated static func stripQuarantine(at url: URL) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-        p.arguments = ["-dr", "com.apple.quarantine", url.path]
-        try? p.run(); p.waitUntilExit()
-    }
-
     nonisolated static func text(for error: Error) -> String {
         if let e = error as? InstallError { return e.description }
         return "更新失败：\(error.localizedDescription)"
@@ -387,6 +370,7 @@ enum InstallError: Error {
     case http(Int)
     case mountFailed(String)
     case unzipFailed
+    case replaceFailed(String)
 
     var description: String {
         switch self {
@@ -395,6 +379,7 @@ enum InstallError: Error {
         case .http(let c):      return "下载失败（HTTP \(c)）"
         case .mountFailed(let m): return "挂载 DMG 失败：\(m.prefix(120))"
         case .unzipFailed:      return "解压失败"
+        case .replaceFailed(let m): return "替换安装失败：\(m)"
         }
     }
 }

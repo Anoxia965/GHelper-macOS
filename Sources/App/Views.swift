@@ -908,7 +908,7 @@ struct SettingsView: View {
                         .foregroundStyle(installer.isWorking ? Color.gray : Brand.amber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("更新会检测→下载→删掉旧安装（移废纸篓）→装新版→重启。驱动如有变化再点「安装/重装」助手。")
+                Text("更新会检测→下载→以 root 替换旧安装（弹一次密码框）→装新版→重启。旧安装自动备份，可恢复。驱动如有变化再点「安装/重装」助手。")
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
 

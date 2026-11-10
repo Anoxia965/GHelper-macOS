@@ -985,8 +985,9 @@ final class HelperClient: ObservableObject {
         }
     }
 
-    private func runAdminScript(_ shell: String,
-                                completion: @escaping (Bool, String) -> Void) {
+    /// 以 root 身份跑 shell 脚本（弹系统密码框）。更新器复用它来替换 root-owned 的旧 App。
+    func runAdminScript(_ shell: String,
+                       completion: @escaping (Bool, String) -> Void) {
         let escaped = shell.replacingOccurrences(of: "\\", with: "\\\\")
                            .replacingOccurrences(of: "\"", with: "\\\"")
         let script = "do shell script \"\(escaped)\" with administrator privileges"
@@ -1008,6 +1009,46 @@ final class HelperClient: ObservableObject {
                              encoding: .utf8) ?? ""
             completion(task.terminationStatus == 0,
                        task.terminationStatus == 0 ? out : err)
+        }
+    }
+
+    /// 以 root 身份替换 /Applications/GHelper.app。
+    /// 背景：早期用 sudo 安装的 App 属于 root，App 在用户态用 FileManager.trashItem 删除会
+    /// 报 “couldn't be moved to the trash because you don't have permission”。这里改用 root
+    /// 脚本完成「备份旧版 → 删旧 → 装新 → 修正属主/权限/隔离属性」，不再依赖用户态删文件。
+    /// - Parameter source: 已解包好的新 GHelper.app（用户态可读，root 可读）。
+    /// - Parameter reply: 回主线程，返回 (是否成功, 描述)。
+    func replaceAppPrivileged(source: URL, reply: @escaping (Bool, String) -> Void) {
+        let src = source.path
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let backup = "/Library/Application Support/GHelper/OldInstalls/GHelper-\(stamp).app"
+        // 全程单引号包路径，避免空格/特殊字符；runAdminScript 只转义反斜杠与双引号，本脚本不含这两项。
+        let script = """
+        set -e
+        SRC='\(src)'
+        DST='/Applications/GHelper.app'
+        BACKUP='/Library/Application Support/GHelper/OldInstalls/GHelper-\(stamp).app'
+        mkdir -p '/Library/Application Support/GHelper/OldInstalls'
+        # 旧版备份（保留可恢复），备份失败再强制删除
+        if [ -d "$DST" ]; then
+          mv "$DST" "$BACKUP" 2>/dev/null || rm -rf "$DST"
+        fi
+        cp -R "$SRC" "$DST"
+        chown -R root:admin "$DST"
+        chmod -R a+rX "$DST"
+        chmod 755 "$DST/Contents/MacOS/GHelper" "$DST/Contents/MacOS/GHelperHelper"
+        xattr -dr com.apple.quarantine "$DST" 2>/dev/null || true
+        echo replaced
+        """
+        runAdminScript(script) { ok, out in
+            DispatchQueue.main.async {
+                if ok {
+                    reply(true, "已更新，旧安装已备份到 \(backup)")
+                } else {
+                    reply(false, out.isEmpty ? "替换失败（root 脚本异常）" : out)
+                }
+            }
         }
     }
 }
