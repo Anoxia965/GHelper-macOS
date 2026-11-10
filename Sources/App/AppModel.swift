@@ -56,6 +56,20 @@ final class AppModel: ObservableObject, RGBBackend {
                                            forKey: Key.showWSInMenuBar) }
     }
 
+    /// 是否在程序坞显示图标（默认关 = 纯菜单栏模式，同 Clash Verge）。
+    /// false → NSApp.setActivationPolicy(.accessory)；true → .regular。
+    @Published var showInDock: Bool = false {
+        didSet { UserDefaults.standard.set(showInDock, forKey: Key.showInDock) }
+    }
+
+    /// 应用菜单栏 / 程序坞形态（在 applicationDidFinishLaunching 与设置开关变化时调用）。
+    func applyActivationPolicy() {
+        NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
+    }
+
+    /// 退出 App。菜单栏模式下 Dock 图标消失，需在 popover / 设置里提供显式退出入口。
+    func quit() { NSApp.terminate(nil) }
+
     // 风扇控制（每把扇独立：CPU 风扇 / GPU 风扇 各自一份）
     @Published var controls: [FanRole: FanControl] = [
         .cpu: FanControl(mode: .auto, tempSource: .cpuSMC, manualPercent: 55,
@@ -1047,6 +1061,7 @@ final class AppModel: ObservableObject, RGBBackend {
         static let auraSpeed = "auraSpeed"
         static let auraPerZone = "auraPerZone"
         static let showWSInMenuBar = "showWindowServerInMenuBar"
+        static let showInDock = "showInDock"
     }
 
     private func save() {
@@ -1107,6 +1122,11 @@ final class AppModel: ObservableObject, RGBBackend {
         // 菜单栏显示 WindowServer：默认关闭，仅用户显式设过才覆盖
         if d.object(forKey: Key.showWSInMenuBar) != nil {
             showWindowServerInMenuBar = d.bool(forKey: Key.showWSInMenuBar)
+        }
+
+        // 在程序坞显示图标：默认关（纯菜单栏），仅用户显式设过才覆盖
+        if d.object(forKey: Key.showInDock) != nil {
+            showInDock = d.bool(forKey: Key.showInDock)
         }
 
         // 键盘灯光：仅当用户确实设过才覆盖默认值

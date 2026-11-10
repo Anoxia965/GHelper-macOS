@@ -1049,6 +1049,15 @@ struct SettingsView: View {
                     }
             }
 
+            DashCard("界面") {
+                Toggle("在程序坞显示图标", isOn: $model.showInDock)
+                    .font(.system(size: 12))
+                    .onChange(of: model.showInDock) { _ in model.applyActivationPolicy() }
+                Text("默认关：纯菜单栏运行（同 Clash Verge），程序坞不留图标。打开后才会显示 Dock 图标，方便用程序坞切换或退出。修改即时生效，无需重启。")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             DashCard("监控显示") {
                 Toggle("菜单栏显示 WindowServer 占用",
                        isOn: $model.showWindowServerInMenuBar)
@@ -1321,13 +1330,21 @@ struct PopoverDashboard: View {
             }
 
             if showWindowAction != nil {
-                Button { showWindowAction?() } label: {
-                    Label("展开到独立窗口", systemImage: "macwindow")
-                        .font(.system(size: 12))
-                        .frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    Button { showWindowAction?() } label: {
+                        Label("展开到独立窗口", systemImage: "macwindow")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Spacer()
+                    Button { model.quit() } label: {
+                        Label("退出 GHelper", systemImage: "power")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
             }

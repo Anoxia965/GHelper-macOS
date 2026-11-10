@@ -17,14 +17,17 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 <key>CFBundleShortVersionString</key>
-<string>1.8.8</string>
+<string>1.8.9</string>
 <key>CFBundleVersion</key>
-<string>1.8.8</string>
+<string>1.8.9</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>GHelper 需要执行脚本以安装特权助手。</string>
 	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- 默认纯菜单栏（agent）应用：无 Dock 图标、无程序坞闪现；设置里可切回「在程序坞显示图标」 -->
+	<key>LSUIElement</key>
 	<true/>
 </dict>
 </plist>

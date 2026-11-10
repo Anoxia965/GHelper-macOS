@@ -31,6 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let model = AppModel.shared
 
+        // 界面形态：默认纯菜单栏（LSUIElement + .accessory），可在设置里切回程序坞图标。
+        // 尽早设置，避免启动时 Dock 图标闪一下。
+        model.applyActivationPolicy()
+
         // 弹出面板（菜单栏快速视图）：紧凑仪表盘，传入「展开到窗口」回调
         let popoverView = PopoverDashboard(showWindowAction: { [weak self] in self?.showMainWindow() })
             .environmentObject(model)
