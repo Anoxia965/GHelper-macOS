@@ -10,19 +10,28 @@ import SwiftUI
 // MARK: - 设计令牌
 
 enum Brand {
-    /// 主强调色：跟随系统强调色（蓝/紫/粉…自动随用户在「系统设置 ▸ 外观」里的选择）。
-    /// 这是「像苹果自家 App」最强的信号——不再大面积铺自定义品牌色。
-    static let accent  = Color.accentColor
-    /// 次强调色（原亮青绿）：统一收敛到系统强调色，避免自定义色跳戏
-    static let accent2 = Color.accentColor
-    /// 深青黑（图标底色，已基本不用，保留兼容）
+    /// 主强调色：靛紫（截图那种旗舰仪表盘的质感主色）
+    static let primary  = Color(rgb: 0x5B6CF0)
+    /// 次强调色：青色（图表第二系列 / 点缀）
+    static let secondary = Color(rgb: 0x18C2C9)
+    /// 兼容别名：accent → 主紫，accent2 → 青
+    static let accent  = primary
+    static let accent2 = secondary
+    /// 深底（图标底色 / 深色模式下导航栏底）
     static let deep    = Color(rgb: 0x0E1B18)
-    /// 浅青底（选中态，已基本不用，保留兼容）
+    /// 浅底（选中态 / 浅色模式导航栏底）
     static let soft    = Color(rgb: 0xE1F5EE)
     /// 琥珀（偏高 / 警告）
     static let amber   = Color(rgb: 0xE0A23A)
     /// 红（过热 / 高载）
-    static let danger  = Color(rgb: 0xD9544B)
+    static let danger  = Color(rgb: 0xE5544B)
+    /// 页面底色：极浅紫灰（截图那种高级灰白底），深浅模式都适配
+    static let canvas  = Color(rgb: 0xF4F5FB)
+    /// 签名渐变（紫 → 青），用于转速环描边与关键高光，强化设计感
+    static var gradient: LinearGradient {
+        LinearGradient(colors: [primary, secondary],
+                      startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
 }
 
 extension Color {
@@ -65,11 +74,12 @@ struct DashCard<Content: View>: View {
             }
             content
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12)
-                    .stroke(.quaternary, lineWidth: 1))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.14), radius: 10, y: 4)
     }
 }
 
@@ -85,7 +95,7 @@ struct BigStat: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 Text(value)
-                    .font(.system(size: 30, weight: .light)).monospacedDigit()
+                    .font(.system(size: 34, weight: .thin)).monospacedDigit()
                     .foregroundStyle(color)
                 Text(unit)
                     .font(.system(size: 13)).foregroundStyle(.secondary)
@@ -111,11 +121,13 @@ struct RingGauge: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(color.opacity(0.15), lineWidth: thickness)
+                .stroke(Color.primary.opacity(0.10), lineWidth: thickness)
             Circle()
                 .trim(from: 0, to: CGFloat(min(1, max(0, value))))
-                .stroke(color, style: StrokeStyle(lineWidth: thickness, lineCap: .round))
+                .stroke(Brand.gradient, style: StrokeStyle(lineWidth: thickness, lineCap: .round))
                 .rotationEffect(.degrees(-90))
+                .shadow(color: color.opacity(0.5), radius: thickness * 0.7, x: 0, y: 0)
+                .animation(.easeInOut(duration: 0.6), value: value)
             VStack(spacing: 1) {
                 Text(title)
                     .font(.system(size: 16, weight: .bold)).monospacedDigit()
@@ -327,5 +339,138 @@ struct LabeledBar: View {
             MiniBar(value: value / 100, color: color)
         }
         .frame(width: 104)
+    }
+}
+
+// MARK: - KPI 大数字卡（旗舰仪表盘顶部那一排）
+
+/// 单个 KPI 卡：图标 + 标题 + 任意内容（大数字 / 走势）
+struct KpiCard<Content: View>: View {
+    let title: String
+    var icon: String = ""
+    var tint: Color = Brand.primary
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                if !icon.isEmpty {
+                    Image(systemName: icon).font(.system(size: 13)).foregroundStyle(tint)
+                }
+                Text(title)
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                Spacer()
+            }
+            content
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+    }
+}
+
+/// 顶部 KPI 一排：温度 / 负载 / 风扇 / 显卡
+struct KPIStrip: View {
+    @EnvironmentObject var model: AppModel
+
+    private func delta(_ arr: [Double]) -> Double? {
+        guard arr.count >= 2 else { return nil }
+        return arr[arr.count - 1] - arr[arr.count - 2]
+    }
+
+    private func trendChip(_ d: Double, unit: String, goodWhenUp: Bool = true) -> some View {
+        let up = d >= 0
+        let good = goodWhenUp ? up : !up
+        return HStack(spacing: 2) {
+            Image(systemName: up ? "arrow.up.right" : "arrow.down.right")
+                .font(.system(size: 9, weight: .bold))
+            Text(String(format: "%+.0f%@", abs(d), unit))
+                .font(.system(size: 10, weight: .medium)).monospacedDigit()
+        }
+        .foregroundStyle(good ? Brand.secondary : Brand.amber)
+    }
+
+    private func tempColor(_ t: Double) -> Color {
+        t >= 90 ? Brand.danger : t >= 80 ? Brand.amber : Brand.primary
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // CPU 温度
+            KpiCard(title: L("温度"), icon: "thermometer.medium", tint: tempColor(model.cpuTemperature ?? 0)) {
+                if let t = model.cpuTemperature {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(String(format: "%.0f", t))
+                            .font(.system(size: 30, weight: .bold)).monospacedDigit()
+                            .foregroundStyle(tempColor(t))
+                        Text("°C").font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    if let d = delta(model.tempHistory) {
+                        trendChip(d, unit: "°", goodWhenUp: false)
+                    }
+                } else {
+                    Text("—").font(.system(size: 26, weight: .bold)).foregroundStyle(.secondary)
+                    Text(L("需装 SMCAMDProcessor 驱动")).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+
+            // CPU 负载
+            KpiCard(title: L("负载"), icon: "cpu", tint: Brand.primary) {
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text(String(format: "%.0f", model.cpuUsage))
+                        .font(.system(size: 30, weight: .bold)).monospacedDigit()
+                        .foregroundStyle(model.cpuUsage > 80 ? Brand.danger
+                                         : model.cpuUsage > 50 ? Brand.amber : Brand.primary)
+                    Text("%").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                if let f = model.cpuFrequencyMHz {
+                    Text(String(format: "%.2f GHz", f / 1000))
+                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                } else {
+                    Text(L("实时频率")).font(.system(size: 10)).foregroundStyle(.tertiary)
+                }
+            }
+
+            // 风扇（主扇转速）
+            KpiCard(title: L("转速"), icon: "fan", tint: Brand.secondary) {
+                if let fan = model.fans.first {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(String(format: "%.0f", fan.actualRPM))
+                            .font(.system(size: 30, weight: .bold)).monospacedDigit()
+                            .foregroundStyle(Brand.secondary)
+                        Text("RPM").font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    Text(model.roleTitle(for: fan.index))
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                } else {
+                    Text("—").font(.system(size: 26, weight: .bold)).foregroundStyle(.secondary)
+                    Text(L("未检测到风扇")).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+
+            // 显卡温度
+            KpiCard(title: L("显卡"), icon: "display", tint: Brand.primary) {
+                if let t = model.gpuTemperature {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(String(format: "%.0f", t))
+                            .font(.system(size: 30, weight: .bold)).monospacedDigit()
+                            .foregroundStyle(t > 85 ? Brand.danger : t > 75 ? Brand.amber : Brand.primary)
+                        Text("°C").font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    if let u = model.gpu.utilization {
+                        Text(String(format: "%.0f%% 占用", u))
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("—").font(.system(size: 26, weight: .bold)).foregroundStyle(.secondary)
+                    Text(L("GPU 温度不可用")).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(height: 124)
     }
 }

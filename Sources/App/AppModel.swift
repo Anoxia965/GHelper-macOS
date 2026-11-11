@@ -62,6 +62,14 @@ final class AppModel: ObservableObject, RGBBackend {
         didSet { UserDefaults.standard.set(showInDock, forKey: Key.showInDock) }
     }
 
+    /// 界面语言（中 / 英）。默认中文；切换后即时重渲所有可见文案。
+    @Published var language: Lang = .zh {
+        didSet {
+            UserDefaults.standard.set(language.rawValue, forKey: Key.language)
+            setLang(language)
+        }
+    }
+
     /// 应用菜单栏 / 程序坞形态（在 applicationDidFinishLaunching 与设置开关变化时调用）。
     func applyActivationPolicy() {
         NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
@@ -1102,6 +1110,7 @@ final class AppModel: ObservableObject, RGBBackend {
         static let showWSInMenuBar = "showWindowServerInMenuBar"
         static let showInDock = "showInDock"
         static let chargeLimit80 = "chargeLimit80"
+        static let language = "language"
     }
 
     private func save() {
@@ -1167,6 +1176,12 @@ final class AppModel: ObservableObject, RGBBackend {
         // 在程序坞显示图标：默认关（纯菜单栏），仅用户显式设过才覆盖
         if d.object(forKey: Key.showInDock) != nil {
             showInDock = d.bool(forKey: Key.showInDock)
+        }
+
+        // 界面语言：默认中文，仅用户显式设过才覆盖
+        if let s = d.string(forKey: Key.language), let l = Lang(rawValue: s) {
+            language = l
+            setLang(l)
         }
 
         // 电池养护（充电上限 80%）：默认关，仅用户显式设过才覆盖

@@ -35,6 +35,7 @@ swiftc -O $DEPLOY $SRC_SHARED Sources/App/FanCurve.swift \
        Sources/App/AppModel.swift \
        Sources/App/Views.swift \
        Sources/App/Components.swift \
+       Sources/App/Localization.swift \
        Sources/Shared/Hardware.swift \
        Sources/App/AppDelegate.swift \
        Sources/App/AppMain.swift \

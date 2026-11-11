@@ -20,38 +20,57 @@ struct RootView: View {
         case lighting = "灯光"
         case hardware = "硬件"
         case settings = "设置"
+        var icon: String {
+            switch self {
+            case .monitor:  return "chart.bar.fill"
+            case .fan:      return "fan.fill"
+            case .battery:  return "battery.100.bolt"
+            case .lighting: return "lightbulb.fill"
+            case .hardware: return "pcdisplay"
+            case .settings: return "gearshape"
+            }
+        }
+        var title: String { L(rawValue) }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if model.helper.helperOutdated {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text("特权助手版本过旧，点「设置 ▸ 安装/重装」更新后将自动生效。")
-                        .font(.system(size: 11)).foregroundStyle(.orange)
-                    Spacer()
-                }
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(Color.orange.opacity(0.12))
-            }
-            header
-            tabBar
-            Divider()
-            ScrollView {
-                VStack(spacing: 12) {
-                    switch tab {
-                    case .monitor:  MonitorView()
-                    case .fan:      FanView()
-                    case .battery:  BatteryView()
-                    case .lighting: LightingView()
-                    case .hardware: HardwareView()
-                    case .settings: SettingsView()
+        HStack(spacing: 0) {
+            navRail
+            VStack(spacing: 0) {
+                if model.helper.helperOutdated {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text(L("特权助手版本过旧"))
+                            .font(.system(size: 11)).foregroundStyle(.orange)
+                        Text(L("点「设置 ▸ 安装/重装」更新"))
+                            .font(.system(size: 11)).foregroundStyle(.orange)
+                        Spacer()
                     }
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(Color.orange.opacity(0.12))
                 }
-                .padding(12)
+                header
+                Divider()
+                HStack(spacing: 0) {
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            switch tab {
+                            case .monitor:  MonitorView()
+                            case .fan:      FanView()
+                            case .battery:  BatteryView()
+                            case .lighting: LightingView()
+                            case .hardware: HardwareView()
+                            case .settings: SettingsView()
+                            }
+                        }
+                        .padding(16)
+                    }
+                    rightRail
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .tint(Brand.primary)
         .environmentObject(model)
         // EFI 相关确认框挂在根视图：安装入口分布在「设置」和「风扇」页，
         // 若挂在 SettingsView，从风扇页点「去安装」时确认框不会出现（兼容修复）。
@@ -72,42 +91,129 @@ struct RootView: View {
         }
     }
 
+    // MARK: 左侧图标导航栏
+
+    private var navRail: some View {
+        VStack(spacing: 4) {
+            VStack(spacing: 2) {
+                Image(systemName: "fan.fill")
+                    .font(.system(size: 22)).foregroundStyle(Brand.primary)
+                Text("GHelper")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .padding(.top, 16).padding(.bottom, 10)
+
+            ForEach(Tab.allCases, id: \.self) { t in
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) { tab = t }
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: t.icon).font(.system(size: 18))
+                        Text(t.title).font(.system(size: 10))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .foregroundStyle(tab == t ? Brand.primary : .secondary)
+                    .background(tab == t ? Brand.primary.opacity(0.12)
+                                           : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 0)
+
+            // 语言切换（中 / EN）
+            Picker("", selection: $model.language) {
+                Text("中").tag(Lang.zh)
+                Text("EN").tag(Lang.en)
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.mini)
+            .labelsHidden()
+            .padding(.bottom, 14)
+        }
+        .frame(width: 78)
+        .padding(.horizontal, 6)
+    }
+
+    // MARK: 头部
+
     private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "fan.fill")
-                .font(.system(size: 15))
-                .foregroundStyle(.secondary)
+        HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("GHelper").font(.system(size: 13, weight: .semibold))
-                Text(Machine.model).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(tab.title)
+                    .font(.system(size: 18, weight: .semibold))
+                Text(Machine.model)
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
             UpdateBadge()
             if showWindowAction != nil {
                 Button { showWindowAction?() } label: { Image(systemName: "macwindow") }
                     .buttonStyle(.borderless)
-                    .help("展开到独立窗口")
+                    .help(L("展开到独立窗口"))
             }
             Circle()
-                .fill(model.helper.isInstalled ? Brand.accent : Brand.amber)
+                .fill(model.helper.isInstalled ? Brand.primary : Brand.amber)
                 .frame(width: 7, height: 7)
-            Text(model.helper.isInstalled ? "助手在线" : "未接管")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
+            Text(model.helper.isInstalled ? L("助手在线") : L("未接管"))
+                .font(.system(size: 10)).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16).padding(.vertical, 12)
     }
 
-    private var tabBar: some View {
-        Picker("视图", selection: $tab) {
-            ForEach(Tab.allCases, id: \.self) { t in
-                Text(t.rawValue).tag(t)
+    // MARK: 右侧快捷栏
+
+    private var boostBinding: Binding<Bool> {
+        Binding(get: { model.boostEnabled },
+                set: { model.setBoost(enabled: $0) })
+    }
+
+    private var rightRail: some View {
+        VStack(spacing: 12) {
+            DashCard(L("系统状态")) {
+                HStack(spacing: 6) {
+                    Circle().fill(model.helper.isInstalled ? Brand.primary : Brand.amber)
+                        .frame(width: 8, height: 8)
+                    Text(model.helper.isInstalled ? L("助手在线") : L("未接管"))
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 6) {
+                    Circle().fill(model.battery.present ? .green : .gray)
+                        .frame(width: 8, height: 8)
+                    Text(model.battery.present
+                         ? (model.battery.isCharging ? L("充电中") : L("已接电源"))
+                         : L("未检测到电池"))
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
             }
+
+            DashCard(L("快捷")) {
+                Toggle(L("睿频跑满"), isOn: boostBinding).toggleStyle(.switch)
+                Toggle(L("电池养护"), isOn: Binding(
+                    get: { model.chargeLimit80 },
+                    set: { model.setChargeLimit(enabled: $0) }))
+                    .toggleStyle(.switch)
+            }
+
+            DashCard(L("活动")) {
+                Text(model.lastApplyMessage.isEmpty ? "—" : model.lastApplyMessage)
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !model.probingMessage.isEmpty {
+                    Divider().padding(.vertical, 4)
+                    Text(model.probingMessage)
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Spacer(minLength: 0)
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .padding(.vertical, 8).padding(.horizontal, 12)
+        .padding(12)
+        .frame(width: 250)
+        .background(Color.primary.opacity(0.025))
     }
 }
 
@@ -161,6 +267,7 @@ struct MonitorView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            KPIStrip()
             HStack(spacing: 12) {
                 tempCard.frame(maxWidth: .infinity)
                 cpuCard.frame(maxWidth: .infinity)
@@ -183,7 +290,7 @@ struct MonitorView: View {
         let ws = model.windowServer
         let color: Color = ws.cpuColorLevel == 2 ? Brand.danger
                          : ws.cpuColorLevel == 1 ? Brand.amber : Brand.accent
-        return DashCard("WindowServer · 窗口合成", accent: color) {
+        return DashCard(L("WindowServer · 窗口合成"), accent: color) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 16) {
                     if ws.available {
@@ -227,7 +334,7 @@ struct MonitorView: View {
     }
 
     private var tempCard: some View {
-        DashCard("温度 · CPU", accent: tempColor(model.cpuTemperature ?? 0)) {
+        DashCard(L("温度 · CPU"), accent: tempColor(model.cpuTemperature ?? 0)) {
             if let t = model.cpuTemperature {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline) {
@@ -254,7 +361,7 @@ struct MonitorView: View {
     }
 
     private var cpuCard: some View {
-        DashCard("处理器") {
+        DashCard(L("处理器")) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     BigStat(value: String(format: "%.0f", model.cpuUsage), unit: "%",
@@ -277,7 +384,7 @@ struct MonitorView: View {
                         color: model.cpuUsage > 80 ? Brand.danger
                                 : model.cpuUsage > 50 ? Brand.amber : Brand.accent)
                 Divider().padding(.vertical, 2)
-                Toggle("睿频跑满", isOn: boostBinding).toggleStyle(.switch)
+                Toggle(L("睿频跑满"), isOn: boostBinding).toggleStyle(.switch)
                 if !model.boostStatus.isEmpty {
                     Text(model.boostStatus)
                         .font(.system(size: 9))
@@ -288,7 +395,7 @@ struct MonitorView: View {
     }
 
     private var fanCard: some View {
-        DashCard("风扇") {
+        DashCard(L("风扇")) {
             if model.fans.isEmpty {
                 Text("未检测到风扇").font(.system(size: 12)).foregroundStyle(.secondary)
             } else {
@@ -314,8 +421,7 @@ struct MonitorView: View {
 
     private var coreCard: some View {
         let s = model.coreSummary
-        return DashCard("CPU 线程占用 · \(Machine.physicalCores) 核 / \(Machine.logicalCores) 线程",
-                        accent: Brand.accent2) {
+        return DashCard(L("CPU 线程占用"), accent: Brand.accent2) {
             VStack(alignment: .leading, spacing: 8) {
                 CoreGrid(loads: model.coreLoads,
                          physical: Machine.physicalCores,
@@ -351,7 +457,7 @@ struct MonitorView: View {
     }
 
     private var memCard: some View {
-        DashCard("内存") {
+        DashCard(L("内存")) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     BigStat(value: String(format: "%.1f", model.memory.usedGB), unit: "GB",
@@ -367,7 +473,7 @@ struct MonitorView: View {
     }
 
     private var gpuCard: some View {
-        DashCard("显卡 · \(model.hardware.gpus.first?.name ?? model.gpu.name)") {
+        DashCard(L("显卡")) {
             VStack(alignment: .leading, spacing: 6) {
                 if let t = model.gpuTemperature {
                     HStack(alignment: .firstTextBaseline) {
@@ -411,7 +517,7 @@ struct MonitorView: View {
     }
 
     private var batteryMiniCard: some View {
-        DashCard("电池") {
+        DashCard(L("电池")) {
             if !model.battery.present {
                 Text("未检测到电池").font(.system(size: 12)).foregroundStyle(.secondary)
             } else {
@@ -449,7 +555,7 @@ struct FanView: View {
     var body: some View {
         VStack(spacing: 12) {
             // 当前转速总览（环形）
-            DashCard("转速总览") {
+            DashCard(L("转速总览")) {
                 if model.fans.isEmpty {
                     Text("未检测到风扇").font(.system(size: 12)).foregroundStyle(.secondary)
                 } else {
@@ -471,10 +577,10 @@ struct FanView: View {
             }
 
             if !model.helper.isInstalled {
-                DashCard("需要特权助手") {
+                DashCard(L("需要特权助手")) {
                     Text("AppleSMC 不允许普通用户进程写入，风扇控制必须走 root 助手。去「设置」页安装。")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
-                    Button("去安装") { model.helper.install() }
+                    Button(L("去安装")) { model.helper.install() }
                         .buttonStyle(.borderedProminent).controlSize(.small)
                 }
             }
@@ -484,7 +590,7 @@ struct FanView: View {
             }
 
             // 双扇同时强冷：两把扇互相等到都稳态，再一起开始 30 秒倒计时
-            DashCard("双扇强冷") {
+            DashCard(L("双扇强冷")) {
                 HStack(spacing: 8) {
                     if model.turboAllActive {
                         Button {
@@ -500,8 +606,8 @@ struct FanView: View {
                     } else {
                         Button {
                             model.triggerTurboAll()
-                        } label: {
-                            Label("双扇强冷 30s", systemImage: "fan.fill")
+                        }                         label: {
+                            Label(L("双扇强冷 30s"), systemImage: "fan.fill")
                         }
                         .buttonStyle(.bordered).tint(.orange)
                     }
@@ -512,7 +618,7 @@ struct FanView: View {
             }
 
             if model.anyUsesCPUTemp {
-                DashCard("CPU 温度校准") {
+                DashCard(L("CPU 温度校准")) {
                     HStack {
                         Text("偏移").font(.system(size: 12)).foregroundStyle(.secondary)
                         Slider(value: $model.cpuTempOffset, in: -50...10, step: 1)
@@ -531,7 +637,7 @@ struct FanView: View {
                 }
             }
 
-            DashCard("状态") {
+            DashCard(L("状态")) {
                 HStack(spacing: 4) {
                     Image(systemName: "info.circle").font(.system(size: 10))
                     Text(model.lastApplyMessage.isEmpty ? "—" : model.lastApplyMessage)
@@ -576,8 +682,8 @@ struct FanControlCard: View {
                 } else {
                     Button {
                         model.triggerTurbo(role)
-                    } label: {
-                        Label("强冷 30s", systemImage: "fan.fill")
+                    }                     label: {
+                        Label(L("强冷 30s"), systemImage: "fan.fill")
                     }
                     .buttonStyle(.bordered).tint(.orange)
                 }
@@ -620,7 +726,7 @@ struct FanControlCard: View {
             if control.mode != .auto {
                 Divider().padding(.vertical, 4)
                 HStack {
-                    Toggle("限制最高转速", isOn: Binding(
+                    Toggle(L("限制最高转速"), isOn: Binding(
                         get: { model.controls[role]?.rpmLimitEnabled ?? false },
                         set: { on in
                             var c = model.controls[role] ?? FanControl()
@@ -688,7 +794,7 @@ struct CurveEditor: View {
             Button {
                 model.resetCurve(role)
             } label: {
-                Label("恢复默认曲线", systemImage: "arrow.counterclockwise")
+                Label(L("恢复默认曲线"), systemImage: "arrow.counterclockwise")
             }
             .buttonStyle(.bordered).font(.system(size: 11))
 
@@ -721,12 +827,12 @@ struct BatteryView: View {
     var body: some View {
         VStack(spacing: 12) {
             if !b.present {
-                DashCard("电池") {
-                    Text("未检测到电池").font(.system(size: 12)).foregroundStyle(.secondary)
+                DashCard(L("电池")) {
+                    Text(L("未检测到电池")).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             } else {
                 HStack(spacing: 12) {
-                    DashCard("电量") {
+                    DashCard(L("电量")) {
                         VStack(spacing: 8) {
                             RingGauge(value: b.chargePercent / 100,
                                       title: String(format: "%.0f", b.chargePercent),
@@ -753,7 +859,7 @@ struct BatteryView: View {
                     .frame(maxWidth: .infinity)
 
                     VStack(spacing: 12) {
-                        DashCard("健康") {
+                        DashCard(L("健康")) {
                             StatRow(label: "健康度",
                                     value: String(format: "%.1f%%", b.healthPercent),
                                     accent: b.healthPercent < 70 ? Brand.amber : .primary)
@@ -762,7 +868,7 @@ struct BatteryView: View {
                             StatRow(label: "设计容量", value: "\(b.designMAh) mAh")
                             StatRow(label: "循环次数", value: "\(b.cycleCount) 次")
                         }
-                        DashCard("实时") {
+                        DashCard(L("实时")) {
                             StatRow(label: "电压", value: String(format: "%.2f V", b.voltage))
                             StatRow(label: "电流", value: String(format: "%d mA", b.amperage),
                                     accent: b.amperage < 0 ? Brand.amber : Brand.accent)
@@ -771,8 +877,8 @@ struct BatteryView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-                DashCard("电池养护 · 充电上限 80%") {
-                    Toggle("开启电池养护（钉 80% 上限）", isOn: Binding(
+                DashCard(L("电池养护 · 充电上限 80%")) {
+                    Toggle(L("开启电池养护（钉 80% 上限）"), isOn: Binding(
                         get: { model.chargeLimit80 },
                         set: { model.setChargeLimit(enabled: $0) }))
                         .toggleStyle(.switch)
@@ -798,7 +904,7 @@ struct LightingView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            DashCard("状态") {
+            DashCard(L("状态")) {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(model.auraAvailable ? Brand.accent : Brand.amber)
@@ -806,7 +912,7 @@ struct LightingView: View {
                     Text(model.auraStatus)
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     Spacer()
-                    Button("重新检测") { model.refreshAura() }
+                    Button(L("重新检测")) { model.refreshAura() }
                         .buttonStyle(.bordered).controlSize(.small)
                 }
                 Text("华硕键盘 RGB（GHRGB 驱动 · ACPI WMNB 通道）。经 root 助手下发，需先装好特权助手。颜色 + 亮度已真机验证；呼吸/彩虹等特效按协议下发，本机未逐一验证。")
@@ -814,7 +920,7 @@ struct LightingView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            DashCard("模式") {
+            DashCard(L("模式")) {
                 Picker("模式", selection: $model.auraMode) {
                     ForEach(AuraMode.allCases) { m in
                         Text(m.rawValue).tag(m)
@@ -824,7 +930,7 @@ struct LightingView: View {
                 .labelsHidden()
             }
 
-            DashCard("颜色") {
+            DashCard(L("颜色")) {
                 ColorPicker("主色", selection: $model.auraColor)
                 if model.auraMode == .breathing {
                     ColorPicker("次色", selection: $model.auraColor2)
@@ -834,7 +940,7 @@ struct LightingView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            DashCard("亮度与速度") {
+            DashCard(L("亮度与速度")) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("亮度").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -860,10 +966,10 @@ struct LightingView: View {
             }
 
             HStack(spacing: 8) {
-                Button { model.applyLighting() } label: { Text("应用") }
+                Button { model.applyLighting() } label: { Text(L("应用")) }
                     .buttonStyle(.borderedProminent).controlSize(.small)
                     .disabled(!model.auraAvailable)
-                Button { model.turnOffLighting() } label: { Text("关闭") }
+                Button { model.turnOffLighting() } label: { Text(L("关闭")) }
                     .buttonStyle(.bordered).controlSize(.small)
                     .disabled(!model.auraAvailable)
                 Spacer()
@@ -883,7 +989,7 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            DashCard("版本与更新") {
+            DashCard(L("版本与更新")) {
                 HStack {
                     Text("当前版本").font(.system(size: 12)).foregroundStyle(.secondary)
                     Spacer()
@@ -892,12 +998,12 @@ struct SettingsView: View {
                 }
                 updateStatus
                 HStack(spacing: 6) {
-                    Button(updater.isChecking ? "检查中…" : "检查更新") { updater.check() }
+                    Button(updater.isChecking ? L("检查中…") : L("检查更新")) { updater.check() }
                         .buttonStyle(.borderedProminent).controlSize(.small)
                         .disabled(updater.isChecking || installer.isWorking)
 
                     if let rel = updater.updateAvailable {
-                        Button(installer.isWorking ? "更新中…" : "下载并更新") {
+                        Button(installer.isWorking ? L("更新中…") : L("下载并更新")) {
                             installer.installUpdate(rel)
                         }
                         .buttonStyle(.borderedProminent).controlSize(.small)
@@ -918,7 +1024,7 @@ struct SettingsView: View {
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
 
-            DashCard("特权助手") {
+            DashCard(L("特权助手")) {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(model.helper.isInstalled ? Brand.accent : Brand.amber)
@@ -929,14 +1035,14 @@ struct SettingsView: View {
                 Text("风扇控制需要 root。助手以 LaunchDaemon 常驻，带看门狗——App 失联 15 秒会自动把风扇交回固件。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                 HStack {
-                    Button("安装 / 重装") { model.helper.install() }
+                    Button(L("安装 / 重装")) { model.helper.install() }
                         .buttonStyle(.borderedProminent).controlSize(.small)
                         .tint(model.helper.helperOutdated ? .red : nil)
-                    Button("卸载") { model.helper.uninstall() }
+                    Button(L("卸载")) { model.helper.uninstall() }
                         .controlSize(.small)
-                    Button("刷新") { model.helper.refreshStatus() }
+                    Button(L("刷新")) { model.helper.refreshStatus() }
                         .controlSize(.small)
-                    Button(model.isProbingFans ? "测绘中…" : "重新测绘风扇") { model.probeFans() }
+                    Button(model.isProbingFans ? L("测绘中…") : L("重新测绘风扇")) { model.probeFans() }
                         .controlSize(.small)
                         .disabled(model.isProbingFans || !model.helper.isInstalled)
                 }
@@ -953,7 +1059,7 @@ struct SettingsView: View {
                 }
             }
 
-            DashCard("系统前置（风扇/灯光 + 睿频必需）") {
+            DashCard(L("系统前置（风扇/灯光 + 睿频必需）")) {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(ocDotColor).frame(width: 7, height: 7)
@@ -961,7 +1067,7 @@ struct SettingsView: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 HStack {
-                    Button("检测并配置…") { model.helper.bootArgPromptPending = true }
+                    Button(L("检测并配置…")) { model.helper.bootArgPromptPending = true }
                         .buttonStyle(.borderedProminent).controlSize(.small)
                         .disabled(model.helper.ocBootArgStatus == .present
                                   || model.helper.ocBootArgStatus == .configured)
@@ -975,12 +1081,12 @@ struct SettingsView: View {
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
 
-            DashCard("驱动与 EFI 管理") {
+            DashCard(L("驱动与 EFI 管理")) {
                 // EFI 分区
                 HStack {
                     Text("EFI 分区").font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
-                    Button(model.helper.efiWorking ? "扫描中…" : "重新扫描") { model.helper.scanEFI() }
+                    Button(model.helper.efiWorking ? L("扫描中…") : L("重新扫描")) { model.helper.scanEFI() }
                         .controlSize(.small)
                         .disabled(model.helper.efiWorking)
                 }
@@ -1034,7 +1140,7 @@ struct SettingsView: View {
 
                 Divider()
 
-                Button("一键补齐缺失驱动") { efiFixPending = true }
+                Button(L("一键补齐缺失驱动")) { efiFixPending = true }
                     .buttonStyle(.borderedProminent).controlSize(.small)
                     .disabled(model.helper.efiWorking || model.helper.driverStatuses.isEmpty)
 
@@ -1047,16 +1153,16 @@ struct SettingsView: View {
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
 
-            DashCard("开机启动") {
-                Toggle("登录时自动启动", isOn: $launchAtLogin)
+            DashCard(L("开机启动")) {
+                Toggle(L("登录时自动启动"), isOn: $launchAtLogin)
                     .font(.system(size: 12))
                     .onChange(of: launchAtLogin) { new in
                         model.helper.setLaunchAtLogin(new)
                     }
             }
 
-            DashCard("界面") {
-                Toggle("在程序坞显示图标", isOn: $model.showInDock)
+            DashCard(L("界面")) {
+                Toggle(L("在程序坞显示图标"), isOn: $model.showInDock)
                     .font(.system(size: 12))
                     .onChange(of: model.showInDock) { _ in model.applyActivationPolicy() }
                 Text("默认关：纯菜单栏运行（同 Clash Verge），程序坞不留图标。打开后才会显示 Dock 图标，方便用程序坞切换或退出。修改即时生效，无需重启。")
@@ -1064,8 +1170,8 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            DashCard("监控显示") {
-                Toggle("菜单栏显示 WindowServer 占用",
+            DashCard(L("监控显示")) {
+                Toggle(L("菜单栏显示 WindowServer 占用"),
                        isOn: $model.showWindowServerInMenuBar)
                     .font(.system(size: 12))
                 Text("默认关：菜单栏继续显示 GPU/CPU 温度。打开后改为显示 WindowServer 的瞬时 CPU 占用（黑苹果无硬件加速时它常是 CPU 大户）。监控页与菜单栏弹层始终显示该项。")
@@ -1073,17 +1179,17 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            DashCard("硬件") {
-                StatRow(label: "机型", value: Machine.model)
-                StatRow(label: "处理器", value: Machine.cpu)
-                StatRow(label: "内存", value: String(format: "%.0f GB",
+            DashCard(L("硬件")) {
+                StatRow(label: L("机型"), value: Machine.model)
+                StatRow(label: L("处理器"), value: Machine.cpu)
+                StatRow(label: L("内存"), value: String(format: "%.0f GB",
                                                    Double(Machine.memoryBytes) / 1073741824))
-                StatRow(label: "SMC 键", value: "\(Machine.smcKeyCount) 个")
-                StatRow(label: "CPU 温度源", value: model.cpuTempKey ?? "缺失",
+                StatRow(label: L("SMC 键"), value: "\(Machine.smcKeyCount) 个")
+                StatRow(label: L("CPU 温度源"), value: model.cpuTempKey ?? L("缺失"),
                         accent: model.cpuTempKey == nil ? .orange : Brand.accent)
             }
 
-            DashCard("致谢 / Credits") {
+            DashCard(L("致谢 / Credits")) {
                 Text("这个 App 能存在，首先要感谢 NullMoth（@nullmoth）：他逆向了 NVIDIA 驱动，让我的华硕 FA607（RTX 4060）能在 macOS 下用上独显——也正因为他的工作，我才有了做这个 App 的念头。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1102,7 +1208,7 @@ struct SettingsView: View {
             }
 
             if let err = model.helper.lastError {
-                DashCard("提示") {
+                DashCard(L("提示")) {
                     Text(err).font(.system(size: 10)).foregroundStyle(.red)
                 }
             }
@@ -1137,25 +1243,25 @@ struct SettingsView: View {
     @ViewBuilder private var updateStatus: some View {
         switch updater.state {
         case .idle:
-            Text("尚未检查。").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(L("尚未检查。")).font(.system(size: 10)).foregroundStyle(.secondary)
         case .checking:
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini)
-                Text("正在向 GitHub 检查…").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(L("正在向 GitHub 检查…")).font(.system(size: 10)).foregroundStyle(.secondary)
             }
         case .upToDate:
-            Label("已是最新版本", systemImage: "checkmark.circle.fill")
+            Label(L("已是最新版本"), systemImage: "checkmark.circle.fill")
                 .font(.system(size: 11)).foregroundStyle(Brand.accent)
         case .available(let rel):
             VStack(alignment: .leading, spacing: 3) {
-                Label("发现新版本 \(rel.tagName)", systemImage: "arrow.down.circle.fill")
+                Label(L("发现新版本") + " \(rel.tagName)", systemImage: "arrow.down.circle.fill")
                     .font(.system(size: 11)).foregroundStyle(Brand.amber)
                 if let body = rel.body, !body.isEmpty {
                     Text(body).font(.system(size: 10)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true).lineLimit(6)
                 }
                 if let page = rel.pageURL {
-                    Link("查看发布说明", destination: page).font(.system(size: 10))
+                    Link(L("查看发布说明"), destination: page).font(.system(size: 10))
                 }
             }
         case .failed(let msg):
@@ -1210,13 +1316,13 @@ struct PopoverDashboard: View {
                                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                                     BigStat(value: String(format: "%.0f", t), unit: "°C",
                                             color: tempColor(t))
-                                    StatusPill(text: t >= 90 ? "过热" : t >= 80 ? "偏高" : "正常",
+                                    StatusPill(text: L(t >= 90 ? "过热" : t >= 80 ? "偏高" : "正常"),
                                                level: tempLevel(t))
                                 }
                                 TrendChart(data: model.tempHistory, color: tempColor(t),
                                            range: 30...100).frame(height: 26)
                             } else {
-                                Text("无温度数据").font(.system(size: 10)).foregroundStyle(.secondary)
+                                Text(L("无温度数据")).font(.system(size: 10)).foregroundStyle(.secondary)
                             }
                         }
                         .frame(maxWidth: .infinity)
@@ -1228,7 +1334,7 @@ struct PopoverDashboard: View {
                                     .font(.system(size: 22, weight: .light)).monospacedDigit()
                                 Text("%").font(.system(size: 11)).foregroundStyle(.secondary)
                             }
-                            Text("全局负载").font(.system(size: 9)).foregroundStyle(.secondary)
+                            Text(L("全局负载")).font(.system(size: 9)).foregroundStyle(.secondary)
                             if let f = model.cpuFrequencyMHz {
                                 Text(String(format: "%.2f GHz", f / 1000))
                                     .font(.system(size: 13, weight: .medium)).monospacedDigit()
@@ -1243,7 +1349,7 @@ struct PopoverDashboard: View {
                 }
 
                 // 核心占用（格子小，不显示线程号；tooltip 仍可看具体线程）
-                DashCard("线程占用 · \(Machine.physicalCores)C/\(Machine.logicalCores)T",
+                DashCard("\(L("线程占用")) · \(Machine.physicalCores)C/\(Machine.logicalCores)T",
                          accent: Brand.accent2) {
                     let s = model.coreSummary
                     VStack(alignment: .leading, spacing: 6) {
@@ -1252,10 +1358,10 @@ struct PopoverDashboard: View {
                                  cell: 12,
                                  pairing: model.corePairing)
                         HStack(spacing: 8) {
-                            Text(String(format: "峰值 %.0f%%", s.peak))
+                            Text(L("峰值") + String(format: " %.0f%%", s.peak))
                                 .font(.system(size: 9)).monospacedDigit()
                                 .foregroundStyle(s.peak >= 85 ? Brand.danger : .secondary)
-                            Text(String(format: "高载 %d/%d", s.busy, s.total))
+                            Text(L("高载") + String(format: " %d/%d", s.busy, s.total))
                                 .font(.system(size: 9)).monospacedDigit()
                                 .foregroundStyle(.secondary)
                             Spacer()
@@ -1287,9 +1393,9 @@ struct PopoverDashboard: View {
                 }
 
                 // 风扇环形（等宽居中，避免偏左留白）
-                DashCard("风扇") {
+                DashCard(L("风扇")) {
                     if model.fans.isEmpty {
-                        Text("未检测到").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(L("未检测到")).font(.system(size: 11)).foregroundStyle(.secondary)
                     } else {
                         HStack(spacing: 0) {
                             ForEach(model.fans, id: \.index) { fan in
@@ -1320,12 +1426,12 @@ struct PopoverDashboard: View {
                     HStack(spacing: 5) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10)).foregroundStyle(.orange)
-                        Text("有 EFI 启动参数配置等待你确认（尚未写入任何 EFI 文件）")
+                        Text(L("有 EFI 启动参数配置等待你确认（尚未写入任何 EFI 文件）"))
                             .font(.system(size: 10)).foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if showWindowAction != nil {
-                        Button("打开主窗口确认") { showWindowAction?() }
+                        Button(L("打开主窗口确认")) { showWindowAction?() }
                             .controlSize(.small)
                     }
                 }
@@ -1338,14 +1444,14 @@ struct PopoverDashboard: View {
             if showWindowAction != nil {
                 HStack(spacing: 8) {
                     Button { showWindowAction?() } label: {
-                        Label("展开到独立窗口", systemImage: "macwindow")
+                        Label(L("展开到独立窗口"), systemImage: "macwindow")
                             .font(.system(size: 12))
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     Spacer()
                     Button { model.quit() } label: {
-                        Label("退出 GHelper", systemImage: "power")
+                        Label(L("退出 GHelper"), systemImage: "power")
                             .font(.system(size: 12))
                     }
                     .buttonStyle(.bordered)
@@ -1361,24 +1467,24 @@ struct PopoverDashboard: View {
     }
 
     private var gpuMiniCard: some View {
-        DashCard("显卡 · \(model.hardware.gpus.first?.name ?? model.gpu.name)") {
+        DashCard(L("显卡")) {
             if let t = model.gpuTemperature {
                 HStack(alignment: .firstTextBaseline) {
                     BigStat(value: String(format: "%.0f", t), unit: "°C",
                             color: t > 85 ? Brand.danger : t > 75 ? Brand.amber : .primary)
                     Spacer()
                     if let u = model.gpu.utilization {
-                        Text(String(format: "%.0f%% 占用", u))
+                        Text(String(format: "%.0f%% ", u) + L("占用"))
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                 }
                 if model.gpu.coreUtil != nil || model.gpu.memUtil != nil {
                     HStack(spacing: 14) {
                         if let c = model.gpu.coreUtil {
-                            LabeledBar(label: "核心", value: c, color: Brand.accent2)
+                            LabeledBar(label: L("核心"), value: c, color: Brand.accent2)
                         }
                         if let m = model.gpu.memUtil {
-                            LabeledBar(label: "显存", value: m, color: Brand.accent)
+                            LabeledBar(label: L("显存"), value: m, color: Brand.accent)
                         }
                         Spacer(minLength: 0)
                     }
@@ -1386,12 +1492,12 @@ struct PopoverDashboard: View {
             } else {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle").font(.system(size: 10))
-                    Text("GPU 温度不可用")
+                    Text(L("GPU 温度不可用"))
                         .font(.system(size: 10)).foregroundStyle(.orange)
                 }
             }
             if model.hardware.gpuVRAM != "—" {
-                StatRow(label: "显存", value: model.hardware.gpuVRAM)
+                StatRow(label: L("显存"), value: model.hardware.gpuVRAM)
             }
         }
     }
@@ -1402,6 +1508,17 @@ struct PopoverDashboard: View {
             Text("GHelper").font(.system(size: 13, weight: .semibold))
             Spacer()
             UpdateBadge()
+            // 语言切换：菜单栏模式默认无主窗口，入口必须在浮层里也能点到
+            Button {
+                model.language = (model.language == .zh) ? .en : .zh
+            } label: {
+                Text(model.language == .zh ? "中" : "EN")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 26, height: 18)
+                    .background(Brand.primary.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help(L("语言"))
             Circle()
                 .fill(model.helper.isInstalled ? Brand.accent : Brand.amber)
                 .frame(width: 6, height: 6)
