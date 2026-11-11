@@ -10,15 +10,16 @@ import SwiftUI
 // MARK: - 设计令牌
 
 enum Brand {
-    /// 主青绿
-    static let accent  = Color(rgb: 0x1D9E75)
-    /// 亮青绿
-    static let accent2 = Color(rgb: 0x5DCAA5)
-    /// 深青黑（图标底色）
+    /// 主强调色：跟随系统强调色（蓝/紫/粉…自动随用户在「系统设置 ▸ 外观」里的选择）。
+    /// 这是「像苹果自家 App」最强的信号——不再大面积铺自定义品牌色。
+    static let accent  = Color.accentColor
+    /// 次强调色（原亮青绿）：统一收敛到系统强调色，避免自定义色跳戏
+    static let accent2 = Color.accentColor
+    /// 深青黑（图标底色，已基本不用，保留兼容）
     static let deep    = Color(rgb: 0x0E1B18)
-    /// 浅青底（选中态）
+    /// 浅青底（选中态，已基本不用，保留兼容）
     static let soft    = Color(rgb: 0xE1F5EE)
-    /// 琥珀（偏高）
+    /// 琥珀（偏高 / 警告）
     static let amber   = Color(rgb: 0xE0A23A)
     /// 红（过热 / 高载）
     static let danger  = Color(rgb: 0xD9544B)
@@ -44,6 +45,7 @@ extension Color {
 
 struct DashCard<Content: View>: View {
     let title: String
+    /// 保留参数以兼容现有调用点；第一方风格下标题统一用中性灰，不再用强调色圆点
     var accent: Color = Brand.accent
     @ViewBuilder var content: Content
 
@@ -56,7 +58,6 @@ struct DashCard<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Circle().fill(accent).frame(width: 6, height: 6)
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -66,8 +67,8 @@ struct DashCard<Content: View>: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12)
                     .stroke(.quaternary, lineWidth: 1))
     }
 }

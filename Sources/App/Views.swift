@@ -76,7 +76,7 @@ struct RootView: View {
         HStack(spacing: 8) {
             Image(systemName: "fan.fill")
                 .font(.system(size: 15))
-                .foregroundStyle(Brand.accent)
+                .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
                 Text("GHelper").font(.system(size: 13, weight: .semibold))
                 Text(Machine.model).font(.system(size: 10)).foregroundStyle(.secondary)
@@ -100,23 +100,14 @@ struct RootView: View {
     }
 
     private var tabBar: some View {
-        HStack(spacing: 4) {
+        Picker("视图", selection: $tab) {
             ForEach(Tab.allCases, id: \.self) { t in
-                Button {
-                    withAnimation(.easeOut(duration: 0.18)) { tab = t }
-                } label: {
-                    Text(t.rawValue)
-                        .font(.system(size: 12,
-                                     weight: tab == t ? .semibold : .regular))
-                        .padding(.horizontal, 14).padding(.vertical, 6)
-                        .background(tab == t ? Brand.soft : Color.clear, in: Capsule())
-                        .foregroundStyle(tab == t ? Brand.accent : .secondary)
-                }
-                .buttonStyle(.plain)
+                Text(t.rawValue).tag(t)
             }
-            Spacer(minLength: 0)
         }
-        .padding(.vertical, 6).padding(.horizontal, 12)
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.vertical, 8).padding(.horizontal, 12)
     }
 }
 
@@ -1407,7 +1398,7 @@ struct PopoverDashboard: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "fan.fill").font(.system(size: 14)).foregroundStyle(Brand.accent)
+            Image(systemName: "fan.fill").font(.system(size: 14)).foregroundStyle(.secondary)
             Text("GHelper").font(.system(size: 13, weight: .semibold))
             Spacer()
             UpdateBadge()
