@@ -160,6 +160,8 @@ enum L10n {
         "打开主窗口确认": "Open Main Window",
         "有 EFI 启动参数配置等待你确认（尚未写入任何 EFI 文件）":
             "EFI boot-arg config awaiting confirmation (nothing written yet)",
+        "曲线已平滑 · 单核 100% 口径，多核可超过 100%":
+            "Smoothed · 100% = one core; multi-core may exceed 100%",
     ]
 
     static func get(_ key: String, _ lang: Lang) -> String {

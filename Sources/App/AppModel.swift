@@ -50,6 +50,34 @@ final class AppModel: ObservableObject, RGBBackend {
     @Published var windowServer = WindowServerStats()
     /// 近 60 次采样的 CPU% 走势，供监控页迷你折线
     @Published var windowServerHistory: [Double] = []
+
+    /// 图表用曲线：3 点中值去孤立尖刺 + EMA 柔化。
+    /// 瞬时采样（ps cputime 差分）在窗口重绘 / 截屏时会冒出单点 100%+ 尖峰，
+    /// 直接连折线就成了硬三角。这里只平滑「显示」，`windowServer.cpuPercent` 仍是真实瞬时值。
+    var smoothedWindowServerHistory: [Double] {
+        let raw = windowServerHistory
+        guard raw.count > 2 else { return raw }
+        var med: [Double] = [raw[0]]
+        for i in 1..<(raw.count - 1) {
+            med.append([raw[i - 1], raw[i], raw[i + 1]].sorted()[1])
+        }
+        med.append(raw[raw.count - 1])
+        var prev = med[0]
+        var out: [Double] = [prev]
+        for v in med.dropFirst() {
+            prev = prev * 0.65 + v * 0.35
+            out.append(prev)
+        }
+        return out
+    }
+
+    /// 图表纵轴上限分档自适应：平稳数据不再被固定的 0...160 压成贴底一条线，
+    /// 也避免单点尖峰把纵轴拉爆。用分档而非连续值，减少纵轴来回跳动。
+    var windowServerChartRange: ClosedRange<Double> {
+        let peak = smoothedWindowServerHistory.max() ?? 0
+        let steps: [Double] = [60, 100, 160, 240, 320]
+        return 0...(steps.first { $0 >= peak * 1.15 } ?? 320)
+    }
     /// 菜单栏是否改显示 WindowServer 占用（默认关，保持原有温度显示）
     @Published var showWindowServerInMenuBar: Bool = false {
         didSet { UserDefaults.standard.set(showWindowServerInMenuBar,

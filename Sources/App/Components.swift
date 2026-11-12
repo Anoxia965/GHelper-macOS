@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit   // NSColor 动态外观色（Brand.canvas 深浅模式自适应）
 
 // MARK: - 设计令牌
 
@@ -25,8 +26,14 @@ enum Brand {
     static let amber   = Color(rgb: 0xE0A23A)
     /// 红（过热 / 高载）
     static let danger  = Color(rgb: 0xE5544B)
-    /// 页面底色：极浅紫灰（截图那种高级灰白底），深浅模式都适配
-    static let canvas  = Color(rgb: 0xF4F5FB)
+    /// 页面底色：浅色 = 极浅紫灰、深色 = 深紫灰（动态色，跟随系统外观）。
+    /// 必须整窗铺满，否则内容不足时会露出系统窗口白底，右下角像凸出一块白板。
+    static let canvas = Color(nsColor: NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return dark
+            ? NSColor(srgbRed: 0.10, green: 0.11, blue: 0.15, alpha: 1)
+            : NSColor(srgbRed: 0xF4 / 255, green: 0xF5 / 255, blue: 0xFB / 255, alpha: 1)
+    })
     /// 签名渐变（紫 → 青），用于转速环描边与关键高光，强化设计感
     static var gradient: LinearGradient {
         LinearGradient(colors: [primary, secondary],

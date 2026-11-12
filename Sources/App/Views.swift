@@ -70,6 +70,8 @@ struct RootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 整窗铺页面底色：内容不足时不再露出系统窗口白底（右下角那块「凸出来」的白板）
+        .background(Brand.canvas, ignoresSafeAreaEdges: .all)
         .tint(Brand.primary)
         .environmentObject(model)
         // EFI 相关确认框挂在根视图：安装入口分布在「设置」和「风扇」页，
@@ -213,7 +215,10 @@ struct RootView: View {
         }
         .padding(12)
         .frame(width: 250)
-        .background(Color.primary.opacity(0.025))
+        .background(Brand.primary.opacity(0.035))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color.primary.opacity(0.07)).frame(width: 1)
+        }
     }
 }
 
@@ -310,9 +315,11 @@ struct MonitorView: View {
                     }
                 }
                 if model.windowServerHistory.count > 1 {
-                    TrendChart(data: model.windowServerHistory, color: color, range: 0...160)
+                    TrendChart(data: model.smoothedWindowServerHistory,
+                               color: color,
+                               range: model.windowServerChartRange)
                         .frame(height: 44)
-                    Text("近 \(model.windowServerHistory.count) 次采样 · 单核 100% 口径，多核可超过 100%")
+                    Text(L("曲线已平滑 · 单核 100% 口径，多核可超过 100%"))
                         .font(.system(size: 9)).foregroundStyle(.secondary)
                 } else {
                     Text("正在建立采样基线…")
@@ -1386,8 +1393,9 @@ struct PopoverDashboard: View {
                             .foregroundStyle(.secondary)
                     }
                     if model.windowServerHistory.count > 1 {
-                        TrendChart(data: model.windowServerHistory,
-                                   color: Brand.accent2, range: 0...160)
+                        TrendChart(data: model.smoothedWindowServerHistory,
+                                   color: Brand.accent2,
+                                   range: model.windowServerChartRange)
                             .frame(height: 24)
                     }
                 }
