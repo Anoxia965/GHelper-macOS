@@ -177,6 +177,9 @@ enum L10n {
         "把下面信息复制发给开发者，就能按你的型号做控制适配":
             "Copy the info below to the developer for model-specific support",
         "复制诊断信息": "Copy diagnostics",
+        "一键发 Issue": "Submit via Issue",
+        "点「一键发 Issue」会在浏览器打开发好的 Issue，确认提交即可；没有 GitHub 账号就用复制发群里。":
+            "Submit via Issue opens a prefilled issue in your browser — just confirm. No GitHub account? Copy and share the text instead.",
         "已复制": "Copied",
         "当前支持状态": "Support status",
         "设备识别 / 诊断导出": "Device detection / diagnostics export",

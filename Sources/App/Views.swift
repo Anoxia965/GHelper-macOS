@@ -1686,6 +1686,13 @@ struct PeripheralsView: View {
 
                     HStack(spacing: 8) {
                         Button {
+                            submitDiagnosticIssue()
+                        } label: {
+                            Label(L("一键发 Issue"), systemImage: "envelope.badge")
+                        }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+
+                        Button {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(monitor.diagnosticText, forType: .string)
                             copied = true
@@ -1694,9 +1701,12 @@ struct PeripheralsView: View {
                             Label(copied ? L("已复制") : L("复制诊断信息"),
                                   systemImage: copied ? "checkmark.circle.fill" : "doc.on.doc")
                         }
-                        .buttonStyle(.borderedProminent).controlSize(.small)
+                        .buttonStyle(.bordered).controlSize(.small)
                         Spacer()
                     }
+                    Text(L("点「一键发 Issue」会在浏览器打开发好的 Issue，确认提交即可；没有 GitHub 账号就用复制发群里。"))
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -1713,6 +1723,33 @@ struct PeripheralsView: View {
             }
         }
         .onAppear { if monitor.lastScan == nil { monitor.refresh() } }
+    }
+
+    /// 构造 GitHub 新 Issue 的预填 URL：标题带机型，正文是诊断文本 + 填写说明。
+    /// 用 urlQueryAllowed 会漏编码 & = + 等字符，必须自己限定 RFC3986 unreserved 集。
+    private func submitDiagnosticIssue() {
+        let title = "外设诊断 · \(Machine.model)"
+        let body = """
+        ### 设备信息（GHelper 自动生成）
+
+        ```
+        \(monitor.diagnosticText)
+        ```
+
+        ### 请补充
+        - 设备型号（如 ROG Azoth / Gladius III / Delta II）：
+        - 希望支持哪些功能（DPI / 回报率 / 按键 / 灯效 / EQ）：
+
+        > 由 GHelper v2.0 外设探测页生成。只读诊断，未写设备。
+        """
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let encTitle = title.addingPercentEncoding(withAllowedCharacters: allowed) ?? title
+        let encBody = body.addingPercentEncoding(withAllowedCharacters: allowed) ?? body
+        let urlString = "https://github.com/Anoxia965/GHelper-macOS/issues/new?title=\(encTitle)&body=\(encBody)"
+        if let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private func statusLine(_ title: String, enabled: Bool) -> some View {
