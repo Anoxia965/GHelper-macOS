@@ -3,6 +3,7 @@
 //
 
 import SwiftUI
+import AppKit   // NSPasteboard（外设诊断信息复制）
 
 // MARK: - 根视图（主窗口）
 
@@ -19,6 +20,7 @@ struct RootView: View {
         case battery = "电池"
         case lighting = "灯光"
         case hardware = "硬件"
+        case peripherals = "外设"
         case settings = "设置"
         var icon: String {
             switch self {
@@ -27,6 +29,7 @@ struct RootView: View {
             case .battery:  return "battery.100.bolt"
             case .lighting: return "lightbulb.fill"
             case .hardware: return "pcdisplay"
+            case .peripherals: return "gamecontroller"
             case .settings: return "gearshape"
             }
         }
@@ -60,6 +63,7 @@ struct RootView: View {
                             case .battery:  BatteryView()
                             case .lighting: LightingView()
                             case .hardware: HardwareView()
+                            case .peripherals: PeripheralsView()
                             case .settings: SettingsView()
                             }
                         }
@@ -1424,6 +1428,26 @@ struct PopoverDashboard: View {
 
                 // 显卡（与主窗口保持一致：温度 + 占用 + 核心/显存细分 + 显存）
                 gpuMiniCard
+
+                // ROG 外设：菜单栏浮层里给状态摘要，详细诊断到主窗口「外设」页
+                DashCard(L("外设")) {
+                    let detected = model.peripherals.devices.count
+                    HStack(spacing: 6) {
+                        Image(systemName: detected > 0 ? "gamecontroller.fill" : "gamecontroller")
+                            .font(.system(size: 12))
+                            .foregroundStyle(detected > 0 ? Brand.primary : .secondary)
+                        Text(detected > 0 ? "\(L("检测到")) \(detected) \(L("个 HID 接口"))"
+                                         : L("未检测到华硕 HID 外设"))
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        Spacer()
+                        if detected > 0 {
+                            Button { model.peripherals.refresh() } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 10))
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
             }
             .padding(12)
 
@@ -1573,6 +1597,169 @@ enum Machine {
 
     private static let _keys = SMC.shared.allKeys()
     static let smcKeyCount: Int = _keys.count
+}
+
+// MARK: - ROG 外设（探测 / 诊断）
+
+struct PeripheralsView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var copied = false
+
+    private var monitor: PeripheralMonitor { model.peripherals }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            DashCard(L("外设探测")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "wave.3.right")
+                            .font(.system(size: 16)).foregroundStyle(Brand.primary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L("扫描华硕 VID 0x0B05 的 HID 设备"))
+                                .font(.system(size: 12, weight: .medium))
+                            Text(L("只读探测，不会向设备写任何数据"))
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            monitor.refresh()
+                        } label: {
+                            Label(monitor.isScanning ? L("扫描中…") : L("重新扫描"),
+                                  systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .controlSize(.small)
+                        .disabled(monitor.isScanning)
+                    }
+
+                    if let error = monitor.lastError {
+                        HStack(spacing: 5) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 10)).foregroundStyle(.orange)
+                            Text(error).font(.system(size: 10)).foregroundStyle(.orange)
+                        }
+                    }
+
+                    Divider()
+
+                    HStack {
+                        Text("\(L("检测到")) \(monitor.devices.count) \(L("个 HID 接口"))")
+                            .font(.system(size: 12, weight: .medium))
+                        Spacer()
+                        if let last = monitor.lastScan {
+                            Text("\(L("上次扫描")) \(Self.timeFormatter.string(from: last))")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if monitor.devices.isEmpty {
+                        VStack(spacing: 6) {
+                            Image(systemName: "gamecontroller")
+                                .font(.system(size: 24)).foregroundStyle(.tertiary)
+                            Text(L("未检测到华硕 HID 外设"))
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                            Text(L("插上 ROG 键鼠 / 耳机后点「重新扫描」"))
+                                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 16)
+                    } else {
+                        ForEach(monitor.devices) { device in
+                            peripheralRow(device)
+                        }
+                    }
+                }
+            }
+
+            DashCard(L("诊断信息")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L("把下面信息复制发给开发者，就能按你的型号做控制适配"))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    ScrollView {
+                        Text(monitor.diagnosticText)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 170)
+                    .padding(8)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+
+                    HStack(spacing: 8) {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(monitor.diagnosticText, forType: .string)
+                            copied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
+                        } label: {
+                            Label(copied ? L("已复制") : L("复制诊断信息"),
+                                  systemImage: copied ? "checkmark.circle.fill" : "doc.on.doc")
+                        }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                        Spacer()
+                    }
+                }
+            }
+
+            DashCard(L("当前支持状态")) {
+                VStack(alignment: .leading, spacing: 6) {
+                    statusLine(L("设备识别 / 诊断导出"), enabled: true)
+                    statusLine(L("DPI / 回报率 / 按键映射"), enabled: false)
+                    statusLine(L("键盘逐键 RGB / 耳机 EQ"), enabled: false)
+                    Text(L("本版是测试版：只做探测，不写设备。收到诊断信息后按型号逐个开放控制。"))
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 4)
+                }
+            }
+        }
+        .onAppear { if monitor.lastScan == nil { monitor.refresh() } }
+    }
+
+    private func statusLine(_ title: String, enabled: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: enabled ? "checkmark.circle.fill" : "hourglass")
+                .font(.system(size: 11))
+                .foregroundStyle(enabled ? Brand.primary : .secondary)
+            Text(title).font(.system(size: 11)).foregroundStyle(.primary)
+            Spacer()
+            Text(enabled ? L("可用") : L("适配中"))
+                .font(.system(size: 10)).foregroundStyle(enabled ? Brand.primary : .secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func peripheralRow(_ device: ASUSPeripheral) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: device.primaryUsage == 2 ? "mouse.fill"
+                              : device.primaryUsage == 6 ? "keyboard.fill"
+                              : "gamecontroller.fill")
+                .font(.system(size: 15)).foregroundStyle(Brand.primary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(device.productName)
+                        .font(.system(size: 12, weight: .medium))
+                    if device.isOmniReceiver {
+                        Text("Omni").font(.system(size: 9))
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Brand.primary.opacity(0.12), in: Capsule())
+                            .foregroundStyle(Brand.primary)
+                    }
+                }
+                Text("PID \(device.pidHex) · \(device.category) · \(L("接口")) \(device.id)")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 5)
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
 }
 
 // MARK: - 硬件详情

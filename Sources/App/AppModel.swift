@@ -31,6 +31,10 @@ final class AppModel: ObservableObject, RGBBackend {
     @Published var fans: [FanState] = []
     @Published var hardware = HardwareInfo()
 
+    /// ROG 外设 HID 探测（VID 0x0B05，只读枚举；具体控制按型号逐步适配）
+    /// 独立 ObservableObject，View 直接 @ObservedObject 观察，不需要 AppModel 转发通知。
+    let peripherals = PeripheralMonitor()
+
     // 频率（CPU 实时频率来自 root 助手跑 powermetrics；GPU 频率无驱动时为 nil）
     @Published var cpuFrequencyMHz: Double?
 

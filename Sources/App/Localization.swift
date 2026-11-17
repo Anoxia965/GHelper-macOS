@@ -162,6 +162,37 @@ enum L10n {
             "EFI boot-arg config awaiting confirmation (nothing written yet)",
         "曲线已平滑 · 单核 100% 口径，多核可超过 100%":
             "Smoothed · 100% = one core; multi-core may exceed 100%",
+
+        // ROG 外设探测（v1.9.4 测试版）
+        "外设": "Peripherals",
+        "外设探测": "Peripheral scan",
+        "扫描华硕 VID 0x0B05 的 HID 设备": "Scan ASUS VID 0x0B05 HID devices",
+        "只读探测，不会向设备写任何数据": "Read-only probe, never writes to devices",
+        "检测到": "Detected",
+        "个 HID 接口": "HID interfaces",
+        "上次扫描": "Last scan",
+        "未检测到华硕 HID 外设": "No ASUS HID peripheral detected",
+        "插上 ROG 键鼠 / 耳机后点「重新扫描」": "Connect a ROG keyboard / mouse / headset, then re-scan",
+        "诊断信息": "Diagnostics",
+        "把下面信息复制发给开发者，就能按你的型号做控制适配":
+            "Copy the info below to the developer for model-specific support",
+        "复制诊断信息": "Copy diagnostics",
+        "已复制": "Copied",
+        "当前支持状态": "Support status",
+        "设备识别 / 诊断导出": "Device detection / diagnostics export",
+        "DPI / 回报率 / 按键映射": "DPI / polling rate / button mapping",
+        "键盘逐键 RGB / 耳机 EQ": "Per-key RGB / headset EQ",
+        "本版是测试版：只做探测，不写设备。收到诊断信息后按型号逐个开放控制。":
+            "Test build: detection only, no device writes. Model-specific control arrives after diagnostics.",
+        "可用": "Available",
+        "适配中": "In progress",
+        "接口": "Interface",
+        "鼠标": "Mouse",
+        "键盘": "Keyboard",
+        "桌面设备": "Desktop device",
+        "多媒体": "Multimedia",
+        "游戏设备": "Gaming device",
+        "其他": "Other",
     ]
 
     static func get(_ key: String, _ lang: Lang) -> String {
