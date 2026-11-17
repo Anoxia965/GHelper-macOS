@@ -163,7 +163,7 @@ enum L10n {
         "曲线已平滑 · 单核 100% 口径，多核可超过 100%":
             "Smoothed · 100% = one core; multi-core may exceed 100%",
 
-        // ROG 外设探测（v1.9.4 测试版）
+        // ROG 外设探测（v2.0 测试版）
         "外设": "Peripherals",
         "外设探测": "Peripheral scan",
         "扫描华硕 VID 0x0B05 的 HID 设备": "Scan ASUS VID 0x0B05 HID devices",
