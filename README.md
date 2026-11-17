@@ -1,224 +1,206 @@
 # GHelper for macOS
 
-把 Windows 上华硕笔记本的 **GHelper** 风扇 / 传感器控制，**用原生 Swift 重写**成 macOS 菜单栏 App，面向 **黑苹果（Hackintosh）** 用户。
-不是把 `GHelper.exe` 搬过来，而是重新实现了它最核心的能力：读传感器、按温度控风扇、独立控制 CPU / GPU 风扇。
+原生 Swift 写的 macOS 菜单栏 App，把 Windows 版 GHelper 的核心能力带到黑苹果：**风扇曲线、传感器监控、睿频、电池养护、键盘灯效**。v2.0 起开始接入 ROG 键鼠耳机外设。
 
-> 当前针对 **华硕 ROG + AMD Ryzen（MacBookPro16,4 SMBIOS）** 的机器调校并实测；风扇控制核心是**与 CPU 品牌无关的**（优先走华硕 EC/WMNB 直连通道，兜底走 AppleSMC 读写），
-> Intel 机型的兄弟下载下来改改温度来源 / 风扇后端也能用，欢迎一起完善（见文末「Intel 机型 / 一起参与开发」）。
+**当前版本 v2.0.1**，针对华硕 ROG + AMD Ryzen（MacBookPro16,4 SMBIOS）实测调校。
+
+> 风扇控制核心**与 CPU 品牌无关**：优先走华硕 EC / WMNB 直连，兜底 AppleSMC。Intel 华硕主板基本开箱可用，见文末「参与开发」。
 
 ---
 
 ## 功能一览
 
-- **菜单栏常驻 + 独立窗口**：点菜单栏风扇图标弹快速面板——一眼看全 CPU 型号/温度/占用/频率、核心占用网格、每把风扇转速、显卡温度与占用，**单页不滚动**；点 Dock 图标或面板上的「窗口」按钮打开大窗口（关窗不退出）。
-- **每把风扇独立控制**：CPU 风扇（fan0）和 GPU 风扇（fan1）各自可选
-  - 模式：**固件自动 / 自定义曲线 / 固定转速**
-  - 温度来源（非自动时）：CPU(SMC) / GPU / 电池 / CPU 占用率
-  - **限制最高转速**：可开「限制最高转速」开关并填目标 RPM（默认按**本机首次自动测绘**出的最高转速的约 80% 自适应，压在实测上限以下），开启后曲线 / 固定转速 / SMC 兜底全部夹到上限以下
-  - **恢复默认曲线**：曲线调乱了一键还原
-- **传感器监控**：CPU / GPU 温度、CPU / GPU 占用率、CPU 实时频率、电池温度与循环次数、每把风扇的实际/目标转速与占空比。
-- **硬件信息页**：自动探测 macOS 版本、SMBIOS、CPU、内存、PCI 显卡、OpenCore、SIP、SMC 后端、kext 加载状态等（读不到显示「—」，不写死本机信息）。
-- **CPU 温度校准**：AMD 的 Tctl 往往偏高，设置里用偏移滑块现场校准（默认 0）。
-- **频率显示**：CPU 实时频率（经 root 助手跑 `powermetrics` 读取，能看到真实 boost 频率）。显卡显示型号、显存、**GPU 温度与占用**（NVIDIA 机型经 [NullMoth](https://github.com/nullmoth/nvidia-macos-driver) 驱动可读取，含核心/显存占用细分）；GPU **核心频率**在 macOS 下物理读不到，诚实标注「不适用」，不影响温度/占用监控。
-- **键盘 RGB 灯光**：华硕键盘 RGB（经 `GHRGB` 内核驱动 → ACPI WMNB 通道）→ 在「灯光」标签页选颜色 + 亮度（0–3）即时下发。颜色与亮度已真机验证；呼吸/彩虹等特效按协议下发，本机未逐一验证。需要 root 助手与 `GHRGB.kext`（随 App 安装自动装入 `/Library/Extensions`）。
+### 监控
+
+- **菜单栏浮层**（320pt）：点菜单栏风扇图标弹出，CPU 型号 / 温度 / 占用 / 频率、核心占用网格、风扇转速、显卡温度与占用、WindowServer 占用，一眼扫尽。
+- **主窗口**（SaaS 风格三区布局）：左侧图标导航 + 中间 KPI 大数字与曲线 + 右侧快捷状态栏。关窗只隐藏，不退出。
+- **传感器**：CPU / GPU 温度与占用、CPU 实时频率、内存、电池温度与循环次数、每把风扇的实际 / 目标转速与占空比。GPU 温度 / 占用经 [NullMoth](https://github.com/nullmoth/nvidia-macos-driver) 驱动读取（含核心 / 显存细分）；GPU **核心频率在 macOS 下读不到**，如实标注「不适用」。
+- **WindowServer 监控**：用 `ps cputime` 差分算瞬时 CPU 占用（黑苹果无硬件加速时常是头号大户），曲线经中值 + EMA 平滑，读数仍是真实瞬时值。
+- **硬件信息页**：macOS 版本、SMBIOS、CPU、内存、PCI 显卡、OpenCore、SIP、kext 加载状态等，读不到显示「—」，不写死。
+- **CPU 温度校准**：AMD Tctl 偏高，设置里用偏移滑块现场校准（默认 0）。
+
+### 控制
+
+- **每把风扇独立**：CPU（fan0）与 GPU（fan1）各自选**固件自动 / 自定义曲线 / 固定转速**；非自动时可指定温度来源（CPU / GPU / 电池 / CPU 占用）；曲线调乱了一键「恢复默认曲线」。
+- **限制最高转速**：首次安装自动测绘本机实测上限，默认压在约 80%，曲线 / 固定转速 / SMC 兜底全部夹到上限以下。
+- **睿频开关**：经 root 助手调 `zenmaster`（Python 版 RyzenAdj）钉 CPU 频率上限——开 = 读取到的最大频率、关 = 基础频率（本机实测约 5250 / 2400 MHz，其他机型按实测走），每 30 秒重涂防系统热管理覆盖。需 boot-args `debug=0x144`。
+- **电池养护（充电上限 80%）**：经 ACPI WMNB 写 EC 寄存器，单档 80%（本机实测只支持这一档，非 60/80/100 三档）。EC 冷启动复位成 100%，助手开机自动重涂。
+- **键盘 RGB**：华硕内置键盘灯效经 `GHRGB.kext` → ACPI WMNB 下发，颜色 + 亮度已真机验证；呼吸 / 彩虹等特效按协议下发，未在每台机器上逐一验证。需 root 助手与 kext。
+
+### 界面
+
+- **中英文切换**：主窗口左下角与菜单栏浮层头部均可切，偏好持久化。
+- **检查更新 / 一键更新**：从 GitHub Releases 拉取；下载安装、替换旧版（备份到 `OldInstalls/`）、自动打开新实例。App 与助手带版本协商，助手过期会在下次启动自动重装同步。
+
+### ROG 外设（v2.0+，测试版）
+
+> 目前是**探测 / 诊断阶段，只读不写**。目标是按型号逐个开放 DPI、回报率、按键映射、逐键 RGB、耳机 EQ 等控制。
+
+- **外设页**：`IOHIDManager` 枚举华硕 VID `0x0B05` 的全部 HID 接口，列出 PID、产品名、usage、location、report descriptor 大小。
+- **回传诊断**：点「一键发 Issue」自动打开预填好的 GitHub Issue，补充设备型号和想要的功能即可提交；无 GitHub 账号可「复制诊断信息」发群里。诊断只含设备标识，无隐私信息。
 
 ---
 
 ## 系统要求
 
-- **macOS 13 (Ventura) 及以上**，包括 **Sequoia (15)** 与 macOS 26；已针对这些版本验证 App 可正常打开与运行（构建时已锁定 `x86_64-apple-macosx13.0` 部署目标，老旧引导盘也不会因 SDK 版本打不开）。
-- 黑苹果引导环境：**OpenCore + VirtualSMC**（不是 AppleSMC）。
-- 风扇控制需要 **AsusFanSMC**（华硕主板风扇键 `F0`/`F1`）；CPU 温度：AMD 需要 `SMCAMDProcessor`，Intel 走 VirtualSMC 自带键。
-- **面向 AMD 黑苹果通用**：风扇控制核心与 CPU 品牌无关（优先走华硕 EC/WMNB 直连，兜底 AppleSMC）；不同机型的最高转速、空闲转速会在**首次安装后自动测绘并存盘**，调速上限按你本机实测值自适应，无需为别人机器上的「额定 7800」买单。Intel 机型暂不在本次兼容范围（见文末）。
-- 白苹果没有 AsusFanSMC，风扇控制不可用，但监控与硬件信息页仍可用。
-- **NVIDIA 显卡想看 GPU 温度 / 占用**：需额外安装 **NullMoth** 驱动（NVAccel）。已装则 App 自动读取；未装则显卡卡显示「—」，属正常降级（不影响其它监控）。
+- **macOS 13 (Ventura) 及以上**（含 Sequoia 15 / macOS 26）；构建锁定 `x86_64-apple-macosx13.0` 部署目标。
+- 黑苹果引导：**OpenCore + VirtualSMC**。
+- 风扇控制需 **AsusFanSMC**；CPU 温度 AMD 需 `SMCAMDProcessor` + `AMDRyzenCPUPowerManagement`（顺序不能反），Intel 走 VirtualSMC 自带键。
+- 白苹果无 AsusFanSMC，风扇控制不可用，但监控与硬件信息页仍可用。
+- NVIDIA 显卡想看 GPU 温度 / 占用需装 **NullMoth** 驱动（NVAccel）；未装则显示「—」，属正常降级。
 
 ---
 
-## 安装（按步骤来）
+## 安装
 
-> 本教程默认你用 **OpenCore（OC）** 引导——我们通用的做法。下面所有 kext / config 步骤都按 OpenCore 说明，不涉及其它引导器。
+> 默认你用 **OpenCore** 引导。下面所有 kext / config 步骤都按 OpenCore 说明。
 
 ### 第 0 步：准备
 
-- 一台用 OpenCore 引导的黑苹果（已装 VirtualSMC）。
-- **华硕主板**（风扇控制需要 AsusFanSMC）；**AMD CPU** 还需两个 AMD kext（下面随附）。
-- 管理员密码（安装助手时会用到）。
-- 先**备份整个 EFI 分区**（改 EFI 前必做）。
+- OpenCore 引导的黑苹果（已装 VirtualSMC）、华硕主板。
+- 管理员密码（装助手时用）。
+- **先备份整个 EFI 分区**。
 
-> ⚠️ **双系统注意**：若 Windows + macOS 双系统，**两块盘各有独立的 EFI 分区**。备份时请分别挂载、各存一份，别把 Windows 的 ESP 当「多余的」清掉；做引导修复时也别让 `bcdboot` / `bootrec` 把引导写错目标盘。`GHelper` 只动 macOS 这一侧 EFI，不会碰 Windows ESP。
+> ⚠️ 双系统注意：Windows + macOS 各有独立 EFI 分区，备份时分别挂载各存一份。App 只动 macOS 这一侧，不碰 Windows ESP。
 
 ### 第 1 步：下载
 
-到 [Releases](https://github.com/Anoxia965/GHelper-macOS/releases) 下载：
+到 [Releases](https://github.com/Anoxia965/GHelper-macOS/releases) 下载 `GHelper-<版本>.pkg`（App + 驱动）或单独的 `Kexts.zip`。
 
-| 文件 | 内容 |
-| --- | --- |
-| `GHelper.pkg` | **安装包**（双击按提示装到 `/Applications`，内含 `GHelper.app` + 所需驱动 `Kexts/`） |
-| `Kexts.zip` | 只想要驱动时下载：VirtualSMC、Lilu、AsusFanSMC、SMCAMDProcessor、AMDRyzenCPUPowerManagement |
+### 第 2 步：把驱动放进 EFI（最关键）
 
-> 想自己编译源码，见文末「从源码构建」。
+OpenCore 开机自动注入 kext，所以**不能**装进 `/Library/Extensions`，必须放 EFI：
 
-### 第 2 步：把驱动装进 EFI（最关键）
+1. 挂载 EFI 分区，解压 `Kexts.zip`，把 5 个 `.kext` 复制到 `EFI/OC/Kexts/`。
+2. 让它们进入 OC 注入列表（`config.plist → Kernel → Add`）：用 **ProperTree** 打开后 `File ▸ OC Snapshot`（⌘R），或用 **OCAT** 更新保存。
+3. **AMD 用户**：确认 `AMDRyzenCPUPowerManagement.kext` 排在 `SMCAMDProcessor.kext` **之前**，反了读不到 CPU 温度。
+4. **系统前置**：风扇 / 灯光 / 睿频需要 OC 的 `NVRAM → Add → 7C436110-…` 加 `debug=0x144`（睿频）+ AMFI 放行（`amfi_get_out_of_my_way=0x1 amfi=0x80`）+ `csr-active-config=430A0000`。点「设置 ▸ 安装 / 重装」后 App 会**先列出所有将要修改的配置供你确认**，确认才写入。也可在「设置 ▸ 系统前置」单独补配。改完需重启。
+5. 保存并重启。
 
-OpenCore 在开机时会自动**注入**这些 kext，所以**不能**装到 `/Library/Extensions`，必须放进 EFI：
-
-1. 挂载 EFI 分区（OC 引导盘上的 `EFI` 卷）。
-2. 解压 `Kexts.zip`，把里面 5 个 `.kext` 复制到 `EFI/OC/Kexts/`。
-   （若已有同名或更新版本，保留你自己的即可。）
-3. 让它们进入 OC 的注入列表（`config.plist` 的 `Kernel → Add`）：
-   - 用 **ProperTree** 打开 `EFI/OC/config.plist` → 菜单 `File ▸ OC Snapshot`（⌘R）；或
-   - 用 **OCAT**（OpenCore Auxiliary Tools）打开后点「更新 / 保存」。
-4. **AMD 用户**：确认 `AMDRyzenCPUPowerManagement.kext` 排在 `SMCAMDProcessor.kext` **之前**（顺序反了会读不到 CPU 温度）。
-5. **系统前置（v1.8.5+）**：风扇/灯光控制需要 ad-hoc 签名的 root 助手能被 launchd 加载，OC 的 `NVRAM → Add → 7C436110-…` 需要 `debug=0x144`（睿频开关）+ AMFI 放行（`amfi_get_out_of_my_way=0x1 amfi=0x80`）+ `csr-active-config=430A0000`。点「安装 / 重装」后 App 会**先列出将要修改的所有 OpenCore 配置（含 U 盘）供你确认**，你点「确认添加」才会写入；未确认前 EFI 不会被改动。也可在「设置 ▸ 系统前置」点「检测并配置…」单独补配。修改后需重启生效。
-6. 保存并重启。
-
-> ⚠️ 只是在你现有 EFI 上**追加**这几个 kext，别动其它部分。
->
-> 🛡️ **EFI 安全（v1.8.5+）**：所有涉及 EFI 的操作都遵循 —— ① 已挂载的 EFI 卷直接使用，**绝不重复挂载**（同一 FAT 卷被挂两次并读写会损坏文件系统，导致 `EFI/OC` 目录丢失）；② 未挂载的分区只挂一次，且只卸载自己挂的；③ 任何写入前先备份 `config.plist` 到 `~/Library/Application Support/GHelper/efi-backups/`；④ 改写保留原 plist 格式（binary/XML），采用「临时文件 → `plutil -lint` 校验 → 原子替换」，校验失败即删除临时文件、原文件保持完好；⑤ **安装与驱动补齐都必须先预览 + 二次确认**，App 不会在后台静默改写 EFI。白果无法放宽核心 SIP 位，此路不适用。
+> 🛡️ **EFI 安全**：已挂载的 EFI 卷直接复用，绝不重复挂载（同一 FAT 卷挂两次并写会损坏文件系统）；未挂载的只挂一次，且只卸载自己挂的；写入前备份 `config.plist`，保留原格式（binary/XML），采「临时文件 → `plutil -lint` → 原子替换」；**安装与驱动补齐都必须先预览 + 二次确认**，App 不会后台静默写 EFI。
 
 ### 第 3 步：安装 App
 
-1. 双击 `GHelper.pkg`，按提示安装到 `/Applications`（驱动已在安装包的 `Kexts/` 里，见第 2 步）。
-2. 打开 App。若被 Gatekeeper 拦住：右键「打开」，或在终端执行
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/GHelper.app
-   ```
-3. 进「设置」页，点 **安装特权助手**（输入管理员密码）。这会把 root 助手装成开机自启的守护进程（`/Library/LaunchDaemons/cn.anoxia.GHelper.helper.plist`，`RunAtLoad + KeepAlive`），并顺便把灯光用的 `GHRGB.kext` 装到 `/Library/Extensions`。
-4. 按系统弹窗授予「辅助功能 / 全盘访问」等权限（App 需要读传感器和硬件信息）。
-5. 若用到键盘 RGB，安装后**系统设置 ▸ 隐私与安全性**底部会出现「`GHRGB` 已被阻止」之类的提示，**点「允许」并重启一次**才能加载灯光驱动（这是 macOS 对第三方 kext 的强制批准流程，不是 App 的 bug）。App 会如实把 kext 安装结果回显在设置页，不会再把错误默默吞掉。
+1. 双击 `.pkg` 装到 `/Applications`。
+2. 被 Gatekeeper 拦住就右键「打开」，或执行 `xattr -dr com.apple.quarantine /Applications/GHelper.app`。
+3. 进「设置」点 **安装 / 重装特权助手**（管理员密码）。助手装成开机自启 LaunchDaemon（`RunAtLoad + KeepAlive`），并装入灯光用的 `GHRGB.kext`。
+4. 按弹窗授予「辅助功能 / 全盘访问」权限。
+5. 若用键盘 RGB，系统设置 ▸ 隐私与安全性底部会出现「`GHRGB` 已被阻止」，**点「允许」并重启一次**（macOS 对第三方 kext 的强制批准，不是 App 的 bug）。
 
-> 以后改完代码重新 `./build.sh` 后，需重新覆盖 `/Applications` 里的 App（或点 App 内「重装助手」），因为自启指向的是 `/Applications` 路径。
+> 改完代码重新 `./build.sh` 后需覆盖 `/Applications` 里的 App（自启指向该路径）。
 
 ### 第 4 步：验证
 
-打开 App 的「硬件信息」页，确认：
-
-- `VirtualSMC`、`AsusFanSMC` 显示「已加载」
-- AMD 机器还能看到 `SMCAMDProcessor` 已加载
-
-看到这些，风扇控制与温度监控就可用了。
-
-### 检查更新 / 一键更新
-
-- 设置页点 **检查更新**，App 会去 GitHub Releases 看有没有新版本（启动时也会静默查一次，有新版顶部会亮角标）。
-- 发现新版点 **下载并更新**：自动下载安装包 → **删掉旧安装（移到废纸篓）** → 装新版 → 重启。
-- **更新后助手自动同步**：App 与 root 助手带版本协商机制——更新后若助手版本对不上，`GHelper` 会在下次启动时点一下提示，自动用一次管理员密码完成助手重装；也能在「设置 ▸ 安装 / 重装」手动触发。再也不用担心「App 升了、底层助手还是旧的、风扇写不进去」。
-- **以后发新版**：往 GitHub 打 tag 发 Release、附上 `GHelper.pkg` 即可，用户端点「检查更新」就能收到。
+打开「硬件信息」页，确认 `VirtualSMC`、`AsusFanSMC` 显示「已加载」；AMD 机器还应看到 `SMCAMDProcessor`。看到这些，风扇控制与温度监控就可用了。
 
 ---
 
-## 怎么用（快速上手）
+## 快速上手
 
-- **菜单栏图标**：点开是快速面板——CPU 型号 / 温度 / 占用 / 频率、核心占用网格、风扇转速、显卡温度与占用，都在一屏内（不滚动）；切风扇模式、开「展开到独立窗口」也在这里。
-- **大窗口**：点 Dock 图标或面板上的「窗口」按钮打开；关窗不退出，只隐藏。
-- **独立控制**：CPU 风扇和 GPU 风扇各选模式与温度来源；非自动模式下用滑块或曲线编辑器设定转速，并可开「限制最高转速」把转速压在额定以下；曲线调乱了点「恢复默认曲线」一键还原。
-- **校准**：CPU 温度偏高就在设置里拉 `cpuTempOffset` 偏移。
+- 点菜单栏图标看快速面板；点「展开到独立窗口」或用 Dock 图标打开大窗口。
+- 风扇页给 CPU / GPU 各选模式；非自动时用滑块或曲线设定转速，可开「限制最高转速」。
+- CPU 温度偏高就在设置里拉 `cpuTempOffset` 偏移。
+- 有 ROG 外设：插上设备 →「外设」页 →「重新扫描」→「一键发 Issue」回传诊断。
 
 ---
 
-## 它是怎么工作的（架构）
+## 架构
 
 ```
 GHelper.app  (菜单栏 + 窗口，普通用户进程)
-   │  NSXPCConnection  ── mach 服务 cn.anoxia.GHelper.helper
+   │  NSXPCConnection ── mach 服务 cn.anoxia.GHelper.helper
    ▼
 cn.anoxia.GHelper.helper  (root LaunchDaemon)
-   ├─ 风扇写：GHRGB kext → ACPI WMNB / EC 直连（优先）或 AppleSMC IOConnectCallStructMethod (selector=2) 兜底
-   ▼
-华硕 EC / AppleSMC  ←→  物理风扇
+   ├─ 风扇写：GHRGB kext → ACPI WMNB / EC 直连（优先）
+   │          或 AppleSMC IOConnectCallStructMethod (selector=2) 兜底
+   ├─ 睿频：zenmaster（Python RyzenAdj）写 AMD SMU
+   └─ 电池养护 / 键盘 RGB：GHRGB kext → ACPI WMNB
+
+ROG 外设探测（v2.0+）：App 层 IOHIDManager 直接枚举 VID 0x0B05，不需要 root
 ```
 
-为什么需要 root 助手：AppleSMC 的**写操作**只允许特权进程（否则返回 `kIOReturnNotReady`），而风扇写优先走的 **ACPI WMNB/EC 直连通道**也要经内核驱动（`GHRGB.kext`）做特权 ioctl，所以「写风扇转速」都经 XPC 转发给 root 助手执行。
+需要 root 助手是因为 AppleSMC **写操作**只允许特权进程（否则 `kIOReturnNotReady`），WMNB 通道也要经内核驱动做特权 ioctl。
 
-助手带 **15 秒看门狗**：App 超过 15 秒没续心跳（比如崩了），助手自动把风扇**交回固件自动**，避免卡在低转速过热。这是安全兜底，请勿移除。
+助手带 **15 秒看门狗**：App 超过 15 秒没续心跳（比如崩了），自动把风扇**交回固件自动**，避免卡低转速过热。这是安全兜底，请勿移除。
 
 ---
 
 ## 风扇控制要点（实测）
 
-- **占空比是 0–100 百分比，不是 0–255**：本机固件风扇曲线约定占空比 1–100，实测出厂曲线占空比字节即 `[1,6,10,15,20,23,28,90]`。App 按此下发，切忌按 0–255 写（会把 50% 写成 128，被固件夹到满速）。无需再折腾 `-asusfanpct`（该 bootarg 本机实测无效）。
-- **风扇爬升很慢**：改完设定后要等约 **30–45 秒** 才到稳态，别以为没生效。
-- **两把扇都走 WMNB/EC 直连通道接管**（CPU=0x00110024 / GPU=0x00110025，经 GHRGB kext 通用选择器 4），手动 / 曲线 / 自动均可；GHRGB kext 未加载或 rgbctl 缺失时自动退回 SMC（`F{i}Md`/`F{i}Tg`）兜底。
-- **GPU 风扇现在也能正常控速**：之前在 SMC 通道下切手动会停转，改走 WMNB 曲线下发（与 Windows GHelper 同款机制）后两把扇都能平滑接管。
-- **限制最高转速（按本机实测自适应，不写死他人机器）**：每把扇可开「限制最高转速」开关并填目标 RPM。**App 在首次安装后会自动测绘**每把风扇的空闲转速与 100% 占空比稳态最高转速，存到本地配置；限速默认即按**本机实测最高转速的约 80%** 自动给出（空载转速也不会被当作上限），开启后曲线 / 固定转速 / SMC 兜底全部夹到上限以下（多留 3% 余量，确保不突破）。想换机器分享配置时，新机器首次运行会重新测绘，不会沿用旧的上限值。
-- **实测最高转速（本机参考值，会随机型自动测绘）**：本机 CPU 风扇空闲~3200、100% 占空比稳态≈7300（额定 7800 由固件 Turbo 按温度自动调度，软件可控上限即约 7300）；GPU 风扇空闲~2100、100% 占空比≈7500。这些都是**测出来**的，不是写死在代码里——到一台新 AMD 机器上，App 会自己量出它的真实上限，限速默认值随之而变。额定由固件 Turbo 按温度自动调度，软件（含本 App 与 Windows GHelper）均无法强制拉满。
+- **占空比是 0–100 百分比，不是 0–255**：固件约定 1–100，实测出厂曲线字节 `[1,6,10,15,20,23,28,90]`。写成 0–255 会把 50% 变成 128 被夹到满速。`-asusfanpct` bootarg 本机实测无效。
+- **风扇爬升很慢**：改完设定等约 **30–45 秒** 才到稳态。
+- **两把扇都走 WMNB / EC 直连接管**（CPU `0x00110024` / GPU `0x00110025`），手动 / 曲线 / 自动均可；GHRGB 未加载时退回 SMC 兜底（仅 CPU 风扇可靠）。
+- **上限按本机实测自适应**：首次安装自动测绘每把扇的空闲与 100% 占空比稳态最高转速，限速默认约 80%（留 3% 余量），换机器会重新测绘。本机参考：CPU 空闲 ~3200 / 100% ≈ 7300 RPM，GPU 空闲 ~2100 / 100% ≈ 7500 RPM。额定由固件 Turbo 按温度调度，软件无法强制拉满。
 
 ---
 
-## Intel 机型 / 一起参与开发
+## 参与开发
 
-风扇控制的核心是**通用的**：App 通过华硕 EC/WMNB 直连通道（由 `GHRGB.kext` 提供）或 AppleSMC（由 VirtualSMC 提供）读写风扇键，与 CPU 是 AMD 还是 Intel 无关。
-不同点只在「温度从哪读、风扇键叫什么」：
+风扇控制核心与 CPU 品牌无关，差异只在「温度从哪读、风扇键叫什么」：
 
-- **Intel + 华硕主板**：`AsusFanSMC` 同样适用（按主板走），风扇控制基本开箱即用；CPU 温度走 VirtualSMC 自带键，不需要那两个 AMD kext。
-- **Intel + 非华硕主板**：通常没有 `AsusFanSMC` 的 `F0/F1` 键，需要接入别的风扇后端（如主板 EC / 其它 SMC 键）。这正是要补的地方。
-- **温度来源扩展**：Intel 可接 `Intel Power Gadget` 或 VirtualSMC 的 `TC0P` 等键，改 `Sources/Shared/Sensors.swift` 的 `TempSource` 解析即可。
+- **Intel + 华硕主板**：`AsusFanSMC` 同样适用，CPU 温度走 VirtualSMC 自带键，不需要 AMD kext。
+- **Intel + 非华硕主板**：通常没有 `F0/F1` 键，需接别的风扇后端。
+- **温度来源扩展**：改 `Sources/Shared/Sensors.swift` 的 `TempSource`。
 
-**代码里的「硬件抽象缝」（方便接手）：**
-- `Sources/Shared/Hardware.swift` — 探测系统/硬件/kext 加载状态，已用**关键字匹配** kext，不写死 bundle ID。
-- `Sources/Shared/Sensors.swift` — `FanState.index`（0=CPU / 1=GPU）、`TempSource` 定义与解析。
-- `Sources/App/FanCurve.swift` — `FanRole`（cpu/gpu，映射 F0/F1）、`FanControl`（模式/温度来源/曲线，Codable）。
-- `Sources/App/AppModel.swift` — 全局状态、`temperature(for:)`、`applyNow()` 下发、看门狗、`cpuTempOffset` 校准。
+代码里的「硬件抽象缝」：
 
-想加 Intel 支持，主要做三件事：①在 `Sensors.swift` 增加 Intel 温度来源；②在 `FanCurve.swift` 抽象「风扇后端」接口，把 AsusFanSMC 的 F0/F1 作为其中一个实现；③`Hardware.swift` 自动识别机型切换默认配置。欢迎提 Issue / PR，也欢迎反馈你在自己主板上测出的风扇键、温度键。
+- `Sources/Shared/Hardware.swift` — 探测系统 / 硬件 / kext 加载状态。
+- `Sources/Shared/Sensors.swift` — `FanState.index`、`TempSource` 定义与解析。
+- `Sources/App/FanCurve.swift` — `FanRole`、`FanControl`（模式 / 温度来源 / 曲线）。
+- `Sources/App/AppModel.swift` — 全局状态、下发、看门狗、温度校准。
+- `Sources/App/PeripheralMonitor.swift` — ROG 外设 HID 探测（只读）。
 
----
+欢迎提 Issue / PR，也欢迎反馈你在自己主板上测出的风扇键、温度键，以及 ROG 外设的诊断信息。
 
-## 从源码构建
+### 从源码构建
 
 需要 Xcode 命令行工具（`xcode-select --install`）：
 
 ```bash
 git clone https://github.com/Anoxia965/GHelper-macOS.git
 cd GHelper-macOS
-./build.sh          # 产物在 Build/GHelper.app（含内嵌的 GHelperHelper）
+./build.sh          # 产物在 Build/GHelper.app + .pkg / .app.zip
 ```
 
-构建后同样先装驱动（第 2 步）、再装 App（第 3 步）。
+构建后按上面第 2、3 步装驱动和 App。
 
 ---
 
 ## 安全须知
 
-- 本项目**不直接修改你的 EFI**；仓库外的 `prepare_efi.py`、`*_efi.sh` 是你本机调 EFI 的辅助脚本，用前务必先备份 EFI。
-- 拿不到有效温度读数时，App 会自动把风扇交回固件自动，**绝不让风扇停在低转速**。
-- 本仓库 **不包含** `Build/`（编译产物）、`Backup/`（EFI 备份，可能含序列号/MLB/ROM）、`Downloads/`（第三方 kext 压缩包），请勿公开这些目录。
-- `Kexts/` 里的 kext 是**第三方开源项目**，版权归各自作者（见 `Kexts/README.md`），本仓库仅随附打包方便下载。
+- 所有 EFI 操作都遵循「先预览 + 二次确认 + 备份 + lint + 原子替换」，App 绝不后台静默写 EFI。
+- 仓库外的 `prepare_efi.py`、`*_efi.sh` 是你本机调 EFI 的辅助脚本，用前务必备份。
+- 拿不到有效温度读数时，App 自动把风扇交回固件自动，绝不让风扇停在低转速。
+- 本仓库**不包含** `Build/`（编译产物）、`Backup/`（EFI 备份，可能含序列号/MLB/ROM）、`Downloads/`（第三方 kext 压缩包），请勿公开这些目录。
+- `Kexts/` 内驱动为第三方开源项目，版权归各自作者，本仓库仅随附打包。
 
 ---
 
-## 已知限制 / 待办
+## 已知限制
 
-- 风扇曲线走 WMNB 通道需要 **GHRGB kext 含通用 WMNB 选择器（v2+）**，该 kext 改动后需重启一次加载；App / 助手 / rgbctl 均为用户态，重启后可随时改随时测。
-- 若 GHRGB kext 未加载或 rgbctl 缺失，风扇控制自动退回 SMC 通道（仅 CPU 风扇可靠，GPU 风扇在 SMC 下仍受限）。
-- 某些信息（OpenCore 版本、SIP 状态）在普通用户权限下读不到，会显示「未检测」，属正常降级。
-- 未来可做：一键卸载脚本；抽象风扇后端以支持更多主板 / Intel。
-
----
-
-## 许可证
-
-代码以 **MIT** 许可证发布（见 `LICENSE`）。`Kexts/` 内驱动为第三方项目，遵循各自许可证。
+- GPU 核心频率在 macOS 下物理读不到；WindowServer 是单进程多核口径，瞬时值可能超过 100%。
+- 电池养护只有 80% 单档（本机 DSDT 写路径限制），风扇手动占空比封顶 75%。
+- v2.0 外设功能目前**只做探测**，具体控制待按型号适配。
+- 某些信息（OpenCore 版本、SIP 状态）普通权限下读不到，显示「未检测」属正常降级。
 
 ---
 
-## 免责声明
+## 许可证 / 免责声明
 
-本软件按「原样」提供，作者不承担因使用本软件导致的任何硬件损坏、数据丢失或系统不稳定后果。操作风扇/温度传感器及黑苹果引导属于进阶折腾，请自担风险，并始终保留 EFI 备份。
+代码以 **MIT** 许可证发布（见 `LICENSE`），`Kexts/` 内驱动遵循各自许可证。
+
+本软件按「原样」提供，作者不承担因使用导致的硬件损坏、数据丢失或系统不稳定后果。操作风扇 / 温度传感器及黑苹果引导属进阶折腾，请自担风险并始终保留 EFI 备份。
 
 ---
 
-## 致谢 / Credits
+## 致谢
 
-这个 App 能存在，首先要感谢 **NullMoth（[@nullmoth](https://github.com/nullmoth)）**：是他逆向了 NVIDIA 驱动（[nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)），让我的华硕 FA607（RTX 4060）能在 macOS 下用上独显——也正因为他的工作，我才有了做这个 App 的念头。没有他，这个项目根本不会开始。他做的 **[1401](https://github.com/nullmoth/1401)** 安装器（Mac / Windows 版）也是装这套 NVIDIA 驱动最省事的方式，推荐需要装驱动的兄弟去用。
+首先感谢 **NullMoth（[@nullmoth](https://github.com/nullmoth)）**：他逆向了 NVIDIA 驱动（[nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)），让我的华硕 FA607（RTX 4060）能在 macOS 下用上独显——也正因如此才有了做这个 App 的念头。他的 [1401](https://github.com/nullmoth/1401) 安装器是装这套驱动最省事的方式，推荐需要装驱动的兄弟使用。
 
-同时也要感谢所有让黑苹果能跑起来的驱动作者与社区：
+同时感谢所有让黑苹果跑起来的驱动作者与社区：
 
-- **Acidanthera** — VirtualSMC / Lilu（SMC 后端与补丁框架的基础）
-- **Shaneee / wtf.spinach** — SMCAMDProcessor / AMDRyzenCPUPowerManagement（AMD CPU 温度与电源管理）
+- **Acidanthera** — VirtualSMC / Lilu
+- **Shaneee / wtf.spinach** — SMCAMDProcessor / AMDRyzenCPUPowerManagement
 - **AsusFanSMC 社区维护者** — 华硕主板风扇控制键
-- **NullMoth 团队** — NVIDIA macOS 驱动（NVAccel / NVRM 等）
+- **NullMoth 团队** — NVIDIA macOS 驱动
 - 以及整个 **OpenCore / Hackintosh** 社区
-
-本仓库仅随附打包这些第三方开源驱动，版权与许可归各自作者所有。
