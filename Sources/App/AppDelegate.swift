@@ -61,8 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.target = self
         }
 
-        // 1.5s 刷新一次状态栏温度
-        titleTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        // 2.5s 刷新一次状态栏温度（与 AppModel 采样同步，温度是慢变量）
+        titleTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
                 self.updateTitle(model.menuBarTitle)

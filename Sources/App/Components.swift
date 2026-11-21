@@ -34,6 +34,16 @@ enum Brand {
             ? NSColor(srgbRed: 0.10, green: 0.11, blue: 0.15, alpha: 1)
             : NSColor(srgbRed: 0xF4 / 255, green: 0xF5 / 255, blue: 0xFB / 255, alpha: 1)
     })
+    /// 卡片底色：实色（跟随系统外观）。
+    /// ⚠️ 以前用 `.ultraThinMaterial` 毛玻璃，但卡片下面就是纯色 canvas，
+    /// 根本没有可模糊的内容，纯属白付渲染成本：一页 7+ 张卡片切页时全部重建合成，
+    /// 是「切页延迟 + 掉帧」的主因。改成实色后视觉几乎无差别，渲染成本归零。
+    static let card = Color(nsColor: NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return dark
+            ? NSColor(srgbRed: 0.16, green: 0.17, blue: 0.21, alpha: 1)
+            : NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 1)
+    })
     /// 签名渐变（紫 → 青），用于转速环描边与关键高光，强化设计感
     static var gradient: LinearGradient {
         LinearGradient(colors: [primary, secondary],
@@ -83,10 +93,10 @@ struct DashCard<Content: View>: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .background(Brand.card, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14)
                     .stroke(Color.primary.opacity(0.10), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.14), radius: 10, y: 4)
+        .shadow(color: .black.opacity(0.10), radius: 6, y: 3)
     }
 }
 
@@ -133,8 +143,9 @@ struct RingGauge: View {
                 .trim(from: 0, to: CGFloat(min(1, max(0, value))))
                 .stroke(Brand.gradient, style: StrokeStyle(lineWidth: thickness, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .shadow(color: color.opacity(0.5), radius: thickness * 0.7, x: 0, y: 0)
-                .animation(.easeInOut(duration: 0.6), value: value)
+                // 去掉发光阴影：shadow + .animation 组合会在切页/数值变化时逐帧重绘
+                // 整条描边（本机实测「监控→风扇」切页掉帧的主因之一）。渐变描边本身已够醒目。
+                .animation(.easeOut(duration: 0.2), value: value)
             VStack(spacing: 1) {
                 Text(title)
                     .font(.system(size: 16, weight: .bold)).monospacedDigit()

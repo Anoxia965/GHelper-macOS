@@ -57,8 +57,16 @@ final class WindowServerMonitor {
     private var previous: Sample?
 
     /// 采样一次。建议在后台串行队列调用（内部不做线程同步）。
+    /// 已知 WindowServer 的 PID（首次全表扫描后缓存）。进程重启时 PID 变化，
+    /// 差分逻辑会自动作废基线并重新全表定位。
+    private var knownPID: Int32?
+
     func sample() -> WindowServerStats {
-        guard let out = Shell.run("/bin/ps", ["-ax", "-o", "pid=,cputime=,rss=,comm="]) else {
+        // ⚠️ 性能：ps -ax 全表在本机实测约 70ms，ps -p <pid> 单进程 <10ms。
+        // 已缓存 PID 时只查单进程；PID 失效（进程重启）时回退到全表扫描重新定位。
+        let args = knownPID.map { ["-p", String($0), "-o", "pid=,cputime=,rss=,comm="] }
+                    ?? ["-ax", "-o", "pid=,cputime=,rss=,comm="]
+        guard let out = Shell.run("/bin/ps", args) else {
             previous = nil
             return WindowServerStats()
         }
@@ -82,6 +90,7 @@ final class WindowServerMonitor {
                            residentMB: rssKB / 1024.0)
             break
         }
+        knownPID = found?.pid    // 缓存命中或重新定位；没找到则清空下次全表扫描
 
         guard let cur = found else {
             previous = nil

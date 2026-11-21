@@ -55,12 +55,22 @@ final class AppModel: ObservableObject, RGBBackend {
     /// 近 60 次采样的 CPU% 走势，供监控页迷你折线
     @Published var windowServerHistory: [Double] = []
 
-    /// 图表用曲线：3 点中值去孤立尖刺 + EMA 柔化。
-    /// 瞬时采样（ps cputime 差分）在窗口重绘 / 截屏时会冒出单点 100%+ 尖峰，
-    /// 直接连折线就成了硬三角。这里只平滑「显示」，`windowServer.cpuPercent` 仍是真实瞬时值。
-    var smoothedWindowServerHistory: [Double] {
+    /// 图表用平滑曲线：3 点中值去孤立尖刺 + EMA 柔化。
+    /// ⚠️ 缓存而非计算属性：原来每次视图重渲都算 3 遍 60 点中值+EMA（两处图表 + range 内部各一遍），
+    /// 切页/采样时全树重渲会白白重算。现在只在 refresh 的采样回调里算一次。
+    /// `windowServer.cpuPercent` 仍是真实瞬时值，只平滑「显示」。
+    @Published private(set) var smoothedWindowServerHistory: [Double] = []
+    /// 图表纵轴上限（同样缓存，避免每次重渲重算峰值）
+    @Published private(set) var windowServerChartUpper: Double = 60
+
+    /// 原始数据变化时重算平滑曲线与纵轴档位。
+    private func rebuildWindowServerChart() {
         let raw = windowServerHistory
-        guard raw.count > 2 else { return raw }
+        guard raw.count > 2 else {
+            smoothedWindowServerHistory = raw
+            windowServerChartUpper = 60
+            return
+        }
         var med: [Double] = [raw[0]]
         for i in 1..<(raw.count - 1) {
             med.append([raw[i - 1], raw[i], raw[i + 1]].sorted()[1])
@@ -72,15 +82,10 @@ final class AppModel: ObservableObject, RGBBackend {
             prev = prev * 0.65 + v * 0.35
             out.append(prev)
         }
-        return out
-    }
-
-    /// 图表纵轴上限分档自适应：平稳数据不再被固定的 0...160 压成贴底一条线，
-    /// 也避免单点尖峰把纵轴拉爆。用分档而非连续值，减少纵轴来回跳动。
-    var windowServerChartRange: ClosedRange<Double> {
-        let peak = smoothedWindowServerHistory.max() ?? 0
+        smoothedWindowServerHistory = out
+        let peak = out.max() ?? 0
         let steps: [Double] = [60, 100, 160, 240, 320]
-        return 0...(steps.first { $0 >= peak * 1.15 } ?? 320)
+        windowServerChartUpper = steps.first { $0 >= peak * 1.15 } ?? 320
     }
     /// 菜单栏是否改显示 WindowServer 占用（默认关，保持原有温度显示）
     @Published var showWindowServerInMenuBar: Bool = false {
@@ -266,6 +271,16 @@ final class AppModel: ObservableObject, RGBBackend {
     private var turboTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
 
+    /// 传感器 IO 专用串行队列：SMC / IORegistry / Mach 采样都是同步阻塞调用
+    /// （一次 refresh 要读 7~8 个 SMC 键 + 遍历 GPU 节点 + 核占用差分），
+    /// 放在主线程会拖慢 SwiftUI 重绘 → 浮层/窗口发卡。统一丢到这条 utility 队列，
+    /// 串行还保证 CoreMonitor 的差分基线不被并发踩坏。回主线程只做轻量赋值。
+    private let sensorQueue = DispatchQueue(label: "cn.anoxia.GHelper.sensors", qos: .utility)
+    private var refreshInFlight = false   // 防止定时器堆积（IO 比 1.5s 慢时不叠加）
+    /// WindowServer 采样要 fork `ps -ax`（本机实测很重，占后台线程大量 CPU），
+    /// 传感器本身 1.5s 一次即可，但 WS 每 2 轮（约 3s）采一次就够看趋势了。
+    private var refreshTick = 0
+
     /// SMCAMDProcessor 装好后可能出现的 CPU 温度键
     private static let cpuTempKeys = ["TC0P", "TC1P", "TC0D", "TC0E", "TC0F",
                                       "TC0J", "TCTL", "TCPU", "TC0C"]
@@ -297,22 +312,31 @@ final class AppModel: ObservableObject, RGBBackend {
             }
             .store(in: &cancellables)
 
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
-            self?.sampleWindowServer()
+        // 2.5s 一次：风扇爬升要 30s、温度更是秒级慢变量，1.5s 采样纯属过度。
+        // 采样少 40% → SwiftUI 重渲少 40%，这是剩余 CPU 的大头（稳定态 sample 显示
+        // 热点全在 SwiftUICore 布局，数据 IO 已不是瓶颈）。
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
+            // refresh 内部已包含 WindowServer 采样，一次后台任务、一次主线程重渲
+            self?.refresh()
         }
-        // 立刻采一次基线，这样第二个 1.5s 周期就能出瞬时值
-        sampleWindowServer()
-        fanTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        // 立刻采一次基线（走完整 refresh，让 WindowServer 有差分基线）
+        refresh()
+        // 风扇曲线下发：WMNB 有 15s 看门狗，4.5s 一次远在安全范围内；
+        // 从 3s 放宽到 4.5s 减少曲线序列化/XPC 往返，强冷结束后回落也仍是秒级。
+        fanTimer = Timer.scheduledTimer(withTimeInterval: 4.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.applyNow() }
         }
-        freqTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        // CPU 频率走 root 助手 fork powermetrics（单次几百 ms，很重），
+        // 频率不会 3 秒一变，降到 6 秒一次即可，常驻 CPU 占用直接减半。
+        freqTimer = Timer.scheduledTimer(withTimeInterval: 6.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshFrequency() }
         }
-        // 强冷：每秒检测转速是否到达稳态；稳态后保持 30 秒再回落
+        // 强冷：每秒检测转速是否到达稳态；稳态后保持 30 秒再回落。
+        // ⚠️ 没在强冷时直接返回（原来每秒都建一个 @MainActor Task 跑空转，是常驻卡顿源之一）。
         turboTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            guard self.turboAllActive || FanRole.allCases.contains(where: { self.isTurboActive($0) }) else { return }
             Task { @MainActor in
-                guard let self = self else { return }
                 let now = Date()
                 var anyExpired = false
                 var remaining: [FanRole: Int] = [:]
@@ -535,30 +559,61 @@ final class AppModel: ObservableObject, RGBBackend {
 
     // MARK: 采集
 
+    /// 传感器采集：重 IO 全部在 sensorQueue 串行执行，主线程只接收结果赋值。
+    /// ⚠️ 调用方不要再包 Task { @MainActor } —— 本方法自己调度。
     func refresh() {
-        cpuUsage = cpuMonitor.sample()
-        coreLoads = coreMonitor.sample()
-        memory = readMemoryStats()
-        gpu = readGPUStats()
-        gpuTemperature = gpu.temperature
-        battery = readBatteryInfo(smc: smc)
-        fans = readFans(smc: smc)
+        guard !refreshInFlight else { return }
+        refreshInFlight = true
+        // 主线程取一次性参数，避免后台读 @MainActor 状态
+        let key = cpuTempKey
+        let offset = cpuTempOffset
 
-        if let key = cpuTempKey, let v = smc.readDouble(key), v > 0 {
-            cpuTemperatureRaw = v
-            cpuTemperature = max(0, v + cpuTempOffset)
-        } else {
-            cpuTemperatureRaw = nil
-            cpuTemperature = nil
-        }
+        sensorQueue.async { [weak self] in
+            guard let self else { return }
+            // ── 以下全部在后台串行队列：同步阻塞 IO，不碰 UI ──
+            let cpuUsage = self.cpuMonitor.sample()
+            let coreLoads = self.coreMonitor.sample()
+            let memory = readMemoryStats()
+            let gpu = readGPUStats()
+            let battery = readBatteryInfo(smc: self.smc)
+            let fans = readFans(smc: self.smc)
+            var cpuTempRaw: Double? = nil
+            if let key, let v = self.smc.readDouble(key), v > 0 { cpuTempRaw = v }
+            // WindowServer 采样也并进这次任务：原来它是独立的后台回调，
+            // 与 refresh 各自回主线程 → 每轮 2 次 objectWillChange / 2 次全树重渲。
+            // 但 `ps -ax` 很重，每 2 轮（约 3s）采一次即可，nil 表示本轮跳过。
+            self.refreshTick += 1
+            let wsStats = (self.refreshTick % 2 == 0) ? self.windowServerMonitor.sample() : nil
 
-        // 温度走势缓冲（近 60 点）
-        if let t = cpuTemperature {
-            tempHistory.append(t)
-        } else if let last = tempHistory.last {
-            tempHistory.append(last)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.cpuUsage = cpuUsage
+                self.coreLoads = coreLoads
+                self.memory = memory
+                self.gpu = gpu
+                self.gpuTemperature = gpu.temperature
+                self.battery = battery
+                self.fans = fans
+                // WindowServer 一次赋值（含平滑曲线/纵轴），和上面的传感器在同一个 MainActor Task，
+                // SwiftUI 会把这一整批 objectWillChange 合并成一次重渲。
+                if let wsStats { self.applyWindowServerStats(wsStats) }
+                if let raw = cpuTempRaw {
+                    self.cpuTemperatureRaw = raw
+                    self.cpuTemperature = max(0, raw + offset)
+                } else {
+                    self.cpuTemperatureRaw = nil
+                    self.cpuTemperature = nil
+                }
+                // 温度走势缓冲（近 60 点）
+                if let t = self.cpuTemperature {
+                    self.tempHistory.append(t)
+                } else if let last = self.tempHistory.last {
+                    self.tempHistory.append(last)
+                }
+                if self.tempHistory.count > 60 { self.tempHistory.removeFirst() }
+                self.refreshInFlight = false
+            }
         }
-        if tempHistory.count > 60 { tempHistory.removeFirst() }
     }
 
     /// 当前主温度（优先 CPU，其次 GPU），走势图/状态共用
@@ -580,19 +635,14 @@ final class AppModel: ObservableObject, RGBBackend {
                 loads.count)
     }
 
-    /// WindowServer 瞬时 CPU / 内存采样（后台执行，结果回主线程更新）
-    private func sampleWindowServer() {
-        windowServerMonitor.sampleAsync { [weak self] stats in
-            Task { @MainActor in
-                guard let self else { return }
-                self.windowServer = stats
-                if stats.available {
-                    self.windowServerHistory.append(stats.cpuPercent)
-                    if self.windowServerHistory.count > 60 {
-                        self.windowServerHistory.removeFirst()
-                    }
-                }
-            }
+    /// 主线程应用 WindowServer 采样结果（只从 refresh 的同一个 MainActor Task 调用，
+    /// 保证与传感器赋值合并在一次 SwiftUI 重渲里）
+    private func applyWindowServerStats(_ stats: WindowServerStats) {
+        windowServer = stats
+        if stats.available {
+            windowServerHistory.append(stats.cpuPercent)
+            if windowServerHistory.count > 60 { windowServerHistory.removeFirst() }
+            rebuildWindowServerChart()
         }
     }
 
@@ -812,7 +862,9 @@ final class AppModel: ObservableObject, RGBBackend {
                 }
             }
         }
-        lastApplyMessage = msgs.joined(separator: "   ·   ")
+        let message = msgs.joined(separator: "   ·   ")
+        // 值没变就不赋值：@Published 即使同值也会发 objectWillChange，触发整棵视图树重渲。
+        if lastApplyMessage != message { lastApplyMessage = message }
     }
 
     /// 把 8 点曲线打包成 asus-wmi 的 4 个 DWORD（温度 / 占空比各 4 字节）。

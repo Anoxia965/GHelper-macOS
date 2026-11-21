@@ -10,6 +10,9 @@ import AppKit   // NSPasteboard（外设诊断信息复制）
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     @State private var tab: Tab = .monitor
+    /// 已访问过的页面：首次切到某页时才构建并缓存，之后切回复用同一份视图树，
+    /// 不再像 switch 那样每次销毁重建（FanView/设置页一堆原生控件，重建就是切页卡顿源）。
+    @State private var visitedTabs: Set<Tab> = [.monitor]
 
     /// 弹层版传入「展开到独立窗口」回调；主窗口版传 nil
     var showWindowAction: (() -> Void)? = nil
@@ -55,20 +58,20 @@ struct RootView: View {
                 header
                 Divider()
                 HStack(spacing: 0) {
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            switch tab {
-                            case .monitor:  MonitorView()
-                            case .fan:      FanView()
-                            case .battery:  BatteryView()
-                            case .lighting: LightingView()
-                            case .hardware: HardwareView()
-                            case .peripherals: PeripheralsView()
-                            case .settings: SettingsView()
+                    // ZStack 常驻已访问页面：切页只改 opacity（零重建）。
+                    // 代价是隐藏页仍会随 @EnvironmentObject 重渲（采样已降到 2.5s）。
+                    ZStack(alignment: .topLeading) {
+                        ForEach(Tab.allCases.filter { visitedTabs.contains($0) }, id: \.self) { t in
+                            ScrollView {
+                                VStack(spacing: 12) { pageView(t) }
+                                    .padding(16)
                             }
+                            .opacity(tab == t ? 1 : 0)
+                            .allowsHitTesting(tab == t)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         }
-                        .padding(16)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     rightRail
                 }
             }
@@ -97,6 +100,19 @@ struct RootView: View {
         }
     }
 
+    @ViewBuilder
+    private func pageView(_ t: Tab) -> some View {
+        switch t {
+        case .monitor:     MonitorView()
+        case .fan:         FanView()
+        case .battery:     BatteryView()
+        case .lighting:    LightingView()
+        case .hardware:    HardwareView()
+        case .peripherals: PeripheralsView()
+        case .settings:    SettingsView()
+        }
+    }
+
     // MARK: 左侧图标导航栏
 
     private var navRail: some View {
@@ -111,7 +127,10 @@ struct RootView: View {
 
             ForEach(Tab.allCases, id: \.self) { t in
                 Button {
-                    withAnimation(.easeOut(duration: 0.18)) { tab = t }
+                    // 不用 withAnimation：切页动画期间会多帧重渲整棵视图树，
+                    // 在采样频繁更新的页面上主观延迟明显。即时切换更跟手。
+                    visitedTabs.insert(t)   // 首次访问时构建，之后复用缓存
+                    tab = t
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: t.icon).font(.system(size: 18))
@@ -321,7 +340,7 @@ struct MonitorView: View {
                 if model.windowServerHistory.count > 1 {
                     TrendChart(data: model.smoothedWindowServerHistory,
                                color: color,
-                               range: model.windowServerChartRange)
+                               range: 0...model.windowServerChartUpper)
                         .frame(height: 44)
                     Text(L("曲线已平滑 · 单核 100% 口径，多核可超过 100%"))
                         .font(.system(size: 9)).foregroundStyle(.secondary)
@@ -1399,7 +1418,7 @@ struct PopoverDashboard: View {
                     if model.windowServerHistory.count > 1 {
                         TrendChart(data: model.smoothedWindowServerHistory,
                                    color: Brand.accent2,
-                                   range: model.windowServerChartRange)
+                                   range: 0...model.windowServerChartUpper)
                             .frame(height: 24)
                     }
                 }
