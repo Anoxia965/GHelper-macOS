@@ -110,6 +110,11 @@ final class AppModel: ObservableObject, RGBBackend {
     /// 应用菜单栏 / 程序坞形态（在 applicationDidFinishLaunching 与设置开关变化时调用）。
     func applyActivationPolicy() {
         NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
+        // 切回纯菜单栏（无 Dock 图标）时通知 AppDelegate 让出前台：
+        // 从 .regular 切到 .accessory 后 App 可能仍残留 frontmost，吞掉用户键盘输入。
+        if !showInDock {
+            NotificationCenter.default.post(name: .ghelperResignFront, object: nil)
+        }
     }
 
     /// 电池养护（充电上限 80%）。默认关；开 = 钉 80%，关 = 解除上限。

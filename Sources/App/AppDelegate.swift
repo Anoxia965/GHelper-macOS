@@ -10,6 +10,11 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    /// AppModel 切回纯菜单栏模式时发，让 AppDelegate 让出前台
+    static let ghelperResignFront = Notification.Name("cn.anoxia.GHelper.resignFront")
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
@@ -34,6 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 界面形态：默认纯菜单栏（LSUIElement + .accessory），可在设置里切回程序坞图标。
         // 尽早设置，避免启动时 Dock 图标闪一下。
         model.applyActivationPolicy()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(resignFrontOnNotification),
+            name: .ghelperResignFront,
+            object: nil
+        )
 
         // 弹出面板（菜单栏快速视图）：紧凑仪表盘，传入「展开到窗口」回调
         let popoverView = PopoverDashboard(showWindowAction: { [weak self] in self?.showMainWindow() })
@@ -73,6 +85,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             UpdateChecker.shared.check(auto: true)
+        }
+
+        // 纯菜单栏启动（没有主窗口）时让出前台：.regular 策略下 App 启动即 frontmost，
+        // 但没有窗口可交互，会吞掉用户的键盘输入（打字被截断）。
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            self.resignFrontIfNoVisibleWindow()
         }
     }
 
@@ -116,10 +135,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// 关窗只隐藏，不退出（保留菜单栏常驻）
+    /// 关窗只隐藏，不退出（保留菜单栏常驻）。
+    /// ⚠️ 关键：把窗口 orderOut 后要让出前台——否则 .regular 策略下 App 没有窗口
+    /// 却仍占着 frontmost，键盘事件全被它吞掉，用户打字打着打着就被截断。
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
+        resignFrontIfNoVisibleWindow()
         return false
+    }
+
+    /// 没有可见窗口时主动退到后台（菜单栏图标不受影响）。
+    /// 在关窗、启动完成、切回纯菜单栏模式时调用。
+    func resignFrontIfNoVisibleWindow() {
+        let hasVisibleWindow = NSApp.windows.contains { $0.isVisible && !$0.isMiniaturized }
+        guard !hasVisibleWindow else { return }
+        NSApp.hide(nil)              // 让出 frontmost，键盘交还给正在输入的 App
+    }
+
+    @objc private func resignFrontOnNotification() {
+        Task { @MainActor in self.resignFrontIfNoVisibleWindow() }
     }
 
     /// 点 Dock 图标 / 重新打开时显示窗口
